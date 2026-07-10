@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linkjoin-robo-sim"
+version = "0.1.0"
+description = "Learning-oriented lower-limb exoskeleton simulation with MuJoCo"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "matplotlib>=3.7",
+  "mujoco>=3.1",
+  "numpy>=1.24",
+  "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+dev = [
+  "jupyter>=1.0",
+  # ROS 2 launch_testing is present on the WSL host and is not pytest 9 compatible.
+  "pytest>=7.4,<9",
+  "setuptools>=68",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

@@ -1,0 +1,2 @@
+# One-command setup for learners. Runtime and learning tools are declared in pyproject.toml.
+-e .[dev]
