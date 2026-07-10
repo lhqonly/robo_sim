@@ -6,7 +6,7 @@ LinkJoin Robo SIM 是一个面向初学者的学习型工程：用仿真逐步�
 
 ## 当前状态
 
-Phase 0（工程初始化）已完成本地骨架。下一阶段是单关节 MuJoCo 模型和 PD 控制实验。
+Phase 1（单关节模型）已完成：可以读取关节角度/速度，并用 motor actuator 施加恒定力矩。下一阶段是用 PD 反馈控制关节到达目标角度。
 
 权威路线图见 [`docs/work_plan.md`](docs/work_plan.md)，完成记录见 [`docs/progress_log.md`](docs/progress_log.md)。
 
@@ -25,10 +25,17 @@ cd ~/robo_sim
 bash scripts/setup_env.sh
 source .venv/bin/activate
 python scripts/check_env.py
-pytest
+python -m pytest
 ```
 
 环境检查会验证 Python 版本、核心依赖、项目包导入，以及 MuJoCo 是否能编译一个最小模型；它不会打开图形窗口。
+
+运行第一个实验：
+
+```bash
+python experiments/001_single_joint_pd/run.py \
+  --torque 0.5 --duration 1.0 --samples 6
+```
 
 ## 目录导览
 

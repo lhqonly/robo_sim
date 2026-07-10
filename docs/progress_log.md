@@ -1,5 +1,26 @@
 # Progress Log
 
+## 2026-07-10 — Phase 1：单关节与恒力矩实验
+
+### 目标
+
+用最小模型建立 `body → joint → actuator → state` 的可运行链路，观察力矩如何改变关节位置和速度；本阶段不引入反馈控制。
+
+### 实现
+
+- `models/single_joint/single_joint.xml`：固定基座、1 DoF hinge、0.5 m / 1 kg 杆件和 `[-2, 2] N·m` motor。
+- `experiments/001_single_joint_pd/run.py`：无窗口恒力矩实验，支持设置力矩、时长和打印采样数。
+- `tests/test_single_joint.py`：验证模型结构、正力矩产生正向运动，以及 CLI 可独立运行并输出状态列。
+- `docs/concepts.md`：补充模型映射、`qpos/qvel/ctrl` 和开环力矩。
+
+### 验证结果
+
+默认实验施加 `0.5 N·m`、运行 1 s：关节从 `0 rad` 运动到约 `0.143473 rad`，最终速度约 `0.078950 rad/s`。Phase 1 新增测试为 `2 passed`，项目完整测试为 `4 passed`；零力矩保持静止，负力矩产生方向相反的运动。
+
+### 下一步
+
+Phase 2 将保留同一模型，把恒定力矩替换为根据位置/速度误差实时计算的 PD 力矩，并绘制响应曲线比较参数效果。
+
 ## 2026-07-10 — 修复不完整虚拟环境
 
 ### 现象

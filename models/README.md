@@ -7,4 +7,4 @@ Each subdirectory will contain human-readable MuJoCo XML for one learning stage:
 - `leg_2d/`: hip, knee and ankle chain
 - `exoskeleton/`: simplified assistive actuators
 
-Phase 0 intentionally contains no physical model yet.
+Phase 1 已在 `single_joint/single_joint.xml` 中实现第一个物理模型。其余目录仍是后续阶段的占位结构。

@@ -1,0 +1,31 @@
+<mujoco model="single_joint">
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="RK4"/>
+
+  <visual>
+    <headlight ambient="0.4 0.4 0.4" diffuse="0.8 0.8 0.8"/>
+  </visual>
+
+  <worldbody>
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.85 0.85 0.85 1"/>
+
+    <!-- A body without a joint is fixed (welded) to the world. -->
+    <body name="base" pos="0 0 0.65">
+      <geom name="base_geom" type="box" size="0.12 0.08 0.08"
+            rgba="0.25 0.35 0.55 1"/>
+
+      <body name="link" pos="0 0 -0.08">
+        <joint name="hinge" type="hinge" axis="0 1 0"
+               range="-2.094 2.094" damping="0.15" armature="0.01"/>
+        <geom name="link_geom" type="capsule" fromto="0 0 0 0 0 -0.5"
+              size="0.04" mass="1" rgba="0.85 0.35 0.2 1"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- With gear=1, one control unit produces one N·m of joint torque. -->
+  <actuator>
+    <motor name="joint_motor" joint="hinge" gear="1"
+           ctrllimited="true" ctrlrange="-2 2"/>
+  </actuator>
+</mujoco>
