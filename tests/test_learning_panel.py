@@ -9,6 +9,7 @@ import mujoco
 import pytest
 
 from robo_sim.ui.learning_panel import LearningPanelServer
+from robo_sim.controllers.pd import PDController
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -57,7 +58,9 @@ def test_learning_panel_serves_chinese_watch_fields_and_exact_torque() -> None:
             "qvel",
             "ctrl",
             "actuator_force",
+            "mode",
         }
+        assert state["mode"] == "torque"
 
         with pytest.raises(urllib.error.HTTPError) as error:
             post_json(panel.url + "api/torque", {"value": 3.0})
@@ -66,5 +69,53 @@ def test_learning_panel_serves_chinese_watch_fields_and_exact_torque() -> None:
         post_json(panel.url + "api/reset", {})
         assert data.ctrl[actuator_id] == pytest.approx(0.0)
         assert data.qpos[model.jnt_qposadr[joint_id]] == pytest.approx(0.0)
+    finally:
+        panel.close()
+
+
+def test_learning_panel_supports_exact_pd_tuning() -> None:
+    model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
+    data = mujoco.MjData(model)
+    joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "hinge")
+    actuator_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_ACTUATOR, "joint_motor"
+    )
+    controller = PDController(
+        kp=30.0,
+        kd=3.0,
+        target_position_rad=0.5,
+        torque_min_nm=-2.0,
+        torque_max_nm=2.0,
+    )
+    panel = LearningPanelServer(
+        model, data, joint_id, actuator_id, pd_controller=controller
+    )
+    panel.start()
+
+    try:
+        with urllib.request.urlopen(panel.url, timeout=2) as response:
+            html = response.read().decode("utf-8")
+        assert "PD 闭环参数" in html
+        assert "目标角度" in html
+        assert "比例增益 Kp" in html
+
+        result = post_json(
+            panel.url + "api/pd",
+            {"target_deg": 25.0, "kp": 24.0, "kd": 2.5},
+        )
+        assert result["target_position_deg"] == pytest.approx(25.0)
+        assert result["kp"] == pytest.approx(24.0)
+        assert result["kd"] == pytest.approx(2.5)
+
+        with urllib.request.urlopen(panel.url + "api/state", timeout=2) as response:
+            state = json.load(response)
+        assert state["mode"] == "pd"
+        assert state["target_position_deg"] == pytest.approx(25.0)
+        assert state["kp"] == pytest.approx(24.0)
+        assert state["kd"] == pytest.approx(2.5)
+
+        with pytest.raises(urllib.error.HTTPError) as error:
+            post_json(panel.url + "api/torque", {"value": 1.0})
+        assert error.value.code == 400
     finally:
         panel.close()

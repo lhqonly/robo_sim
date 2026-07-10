@@ -6,7 +6,7 @@ LinkJoin Robo SIM 是一个面向初学者的学习型工程：用仿真逐步�
 
 ## 当前状态
 
-Phase 1（单关节模型）已完成：可以读取关节角度/速度，并用 motor actuator 施加恒定力矩。下一阶段是用 PD 反馈控制关节到达目标角度。
+Phase 1（单关节恒力矩）和 Phase 2（PD 闭环控制）已完成：可以在原生 MuJoCo Viewer + 中文面板中观察反馈控制，也可以生成角度、速度、力矩响应曲线与参数对比图。下一阶段是膝关节/小腿摆杆和重力矩。
 
 权威路线图见 [`docs/work_plan.md`](docs/work_plan.md)，完成记录见 [`docs/progress_log.md`](docs/progress_log.md)。
 
@@ -30,21 +30,22 @@ python -m pytest
 
 环境检查会验证 Python 版本、核心依赖、项目包导入，以及 MuJoCo 是否能编译一个最小模型；它不会打开图形窗口。
 
-运行第一个实验：
+运行 PD 闭环实验并生成响应曲线：
 
 ```bash
 python experiments/001_single_joint_pd/run.py \
-  --torque 0.5 --duration 1.0 --samples 6
+  --mode pd --target-deg 30 --kp 30 --kd 3 \
+  --duration 3 --samples 7 --compare
 ```
 
-在 WSLg 中打开 MuJoCo Viewer，实时观察杆件运动：
+在 WSLg 中打开 MuJoCo Viewer，实时观察并调节参数：
 
 ```bash
 python experiments/001_single_joint_pd/run.py \
-  --view --torque 1.0
+  --mode pd --view --target-deg 30 --kp 30 --kd 3
 ```
 
-`--view` 会同时打开官方 3D Viewer 和中文学习控制面板。学习面板提供 Watch 下拉框、实时中文解释、精确扭矩数字输入、滑块和预设按钮。若不想自动打开浏览器，可添加 `--no-browser`，再访问终端打印的本地 URL。
+`--view` 会同时打开官方 3D Viewer 和中文学习控制面板。PD 模式下，面板提供 Watch 下拉框、实时中文解释、目标角度、`Kp/Kd` 精确输入、误差和力矩限幅状态；`--mode torque` 仍保留精确扭矩输入、滑块和预设按钮。若不想自动打开浏览器，可添加 `--no-browser`，再访问终端打印的本地 URL。
 
 ## 目录导览
 

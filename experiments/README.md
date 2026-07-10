@@ -4,4 +4,4 @@ Experiments are numbered in learning order and should be independently runnable.
 
 当前实验：
 
-- `001_single_joint_pd/`：Phase 1 使用恒定力矩观察单关节运动；Phase 2 将在同一模型上加入 PD 控制。
+- `001_single_joint_pd/`：Phase 1 使用恒定力矩观察单关节运动；Phase 2 使用 PD 反馈控制目标角度并绘制响应曲线。

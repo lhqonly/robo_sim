@@ -1,10 +1,8 @@
-# Experiment 001：单关节恒力矩
+# Experiment 001：单关节恒力矩与 PD 控制
 
 ## 目标
 
-验证机器人/外骨骼最小链路：Python 写入 motor 力矩，MuJoCo 推进动力学，再由 Python 读取关节位置与速度。
-
-当前是 Phase 1 的开环实验，目录名中的 PD 会在 Phase 2 实现。
+逐步验证机器人/外骨骼的最小控制链路：Phase 1 由 Python 写入恒定 motor 力矩并观察运动；Phase 2 读取关节位置/速度作为反馈，用 PD 控制器实时改变力矩，使关节接近目标角度。
 
 ## 模型
 
@@ -16,18 +14,55 @@
 
 ## 运行
 
+### Phase 2：PD 闭环控制（当前建议）
+
+先运行 3 秒无窗口仿真并生成响应曲线：
+
 ```bash
 cd ~/robo_sim
 source .venv/bin/activate
 python experiments/001_single_joint_pd/run.py \
-  --torque 0.5 --duration 1.0 --samples 6
+  --mode pd --target-deg 30 --kp 30 --kd 3 \
+  --duration 3 --samples 7 --compare
+```
+
+会生成（生成物不提交 Git）：
+
+```text
+experiments/001_single_joint_pd/results/pd_response.png
+experiments/001_single_joint_pd/results/pd_gain_comparison.png
+```
+
+打开 3D Viewer 和中文 PD 面板：
+
+```bash
+python experiments/001_single_joint_pd/run.py \
+  --mode pd --view --target-deg 30 --kp 30 --kd 3
+```
+
+中文面板可以在 Viewer 运行时精确修改目标角度、`Kp` 和 `Kd`。PD 模式下，原生 Viewer 右侧紫色 `joint_motor` 不再是手动输入，而是控制器每个时间步算出的输出；即使拖动，也会立即被控制器覆盖。
+
+建议在中文面板依次尝试：
+
+- `Kp=8, Kd=1`：拉向目标较弱，最终误差更大。
+- `Kp=30, Kd=0.2`：阻尼较弱。
+- `Kp=30, Kd=3`：当前模型下较平衡。
+- `Kp=30, Kd=20`：阻尼很强，接近目标更慢。
+
+### Phase 1：恒力矩开环（保留用于对照）
+
+```bash
+cd ~/robo_sim
+source .venv/bin/activate
+python experiments/001_single_joint_pd/run.py \
+  --mode torque --torque 0.5 --duration 1.0 --samples 6
 ```
 
 当前 WSL 支持 WSLg 时，可打开 MuJoCo Viewer 实时观察：
 
 ```bash
 python experiments/001_single_joint_pd/run.py \
-  --view --torque 1.0
+  --mode torque --view --torque 1.0
 ```
 
 Viewer 中蓝色方块是固定基座，黄色圆柱是简化的关节/电机位置，橙色杆是运动连杆。拖动鼠标可以旋转视角，滚轮可以缩放。GUI 会一直运行，关闭 Viewer 窗口或先点击终端再按 `Ctrl+C` 才退出。GUI 在隔离的子进程中运行，因此其原生窗口清理不会占住终端。
@@ -36,15 +71,25 @@ Viewer 中蓝色方块是固定基座，黄色圆柱是简化的关节/电机位
 
 ### 中文学习面板
 
-原生 Viewer 的 `Watch.Field` 是自由文本，原生 `joint_motor` 也是只有滑块的固定控件；Python Viewer API 不能直接把它们替换为自定义控件。因此项目增加了一个与同一份 MuJoCo `data` 实时同步的辅助面板：
+原生 Viewer 的 `Watch.Field` 是自由文本，原生 `joint_motor` 也是只有滑块的固定控件；Python Viewer API 不能直接把它们替换为自定义控件。因此项目增加了一个与同一份 MuJoCo `data` 实时同步的辅助面板。
+
+共同功能：
 
 - Watch 下拉框：`qpos`（关节角度）、`qvel`（角速度）、`ctrl`（指令扭矩）、`actuator_force`（实际输出）。
 - 每个字段显示中文含义、单位和实时值。
+- 重置按钮：恢复初始姿态。
+
+`--mode torque` 时显示：
+
 - 精确扭矩输入框：可键入例如 `1.234`，按 Enter 或点击“应用精确值”。
 - 快速滑块与 `-2/-1/-0.5/0/+0.5/+1/+2` 预设按钮。
-- 重置按钮：恢复初始姿态并清零扭矩。
 
-原生 Viewer 的紫色 Control 和中文面板控制的是同一个 `data.ctrl[0]`，任一侧修改都会在另一侧体现。
+`--mode pd` 时显示：
+
+- 目标角度（度）、比例增益 `Kp`、微分增益 `Kd` 的精确输入。
+- 当前误差、限幅前 PD 力矩，以及是否触及执行器上限。
+
+恒扭矩模式下，原生 Viewer 的紫色 Control 和中文面板控制同一个 `data.ctrl[0]`。PD 模式下，它们仍显示同一个值，但该值是控制器输出；需要在中文面板修改目标或增益，而不是拖动紫色滑块。
 
 如果浏览器没有自动打开，复制终端输出，例如：
 
@@ -61,9 +106,14 @@ python experiments/001_single_joint_pd/run.py \
 
 参数：
 
+- `--mode`：`torque` 为 Phase 1 开环，`pd` 为 Phase 2 闭环；默认保持 `torque` 以兼容旧命令。
 - `--torque`：恒定电机力矩，单位 N·m，允许范围 `[-2, 2]`。
+- `--target-deg`：PD 目标角度，单位 degree，关节范围约 `[-120°, 120°]`。
+- `--kp` / `--kd`：PD 比例/微分增益，必须非负。
 - `--duration`：无窗口模式的仿真时间，单位 s，必须大于 0。
 - `--samples`：无窗口模式打印多少个等间隔状态，至少为 2。
+- `--plot`：PD 三联响应图保存路径。
+- `--compare`：额外生成四组 `Kp/Kd` 参数对比图。
 - `--view`：打开交互式 GUI，忽略 `--duration/--samples`，直到人工退出；不加时采用无窗口快速运行。
 - `--no-browser`：仍启动中文学习面板服务，但不自动打开浏览器。
 
@@ -90,6 +140,18 @@ angle ≈ 0.420 rad ≈ 24.1°
 
 ## 如何读结果
 
+### Phase 2 响应曲线
+
+三行图从上到下分别表示：
+
+1. 目标角度与实际角度：两条线越接近，跟踪误差越小。
+2. 角速度：接近 `0` 表示关节逐渐稳定；正负反复变化通常意味着振荡。
+3. 控制力矩：灰色 `raw PD` 是公式想要的值，橙色 `applied` 是经过 `[-2, 2] N·m` 限幅后真正施加的值。
+
+默认参数在 3 秒后约到达 `27.8°`，而不是恰好 `30°`。原因是杆件受重力作用：速度为零后 D 项消失，纯 PD 必须保留约 `2.2°` 的位置误差，才能让 P 项继续产生托住杆件的力矩。这叫静态误差，后续可用重力补偿或积分控制减小。
+
+### Phase 1 输出
+
 输出列分别是时间、关节角度、角速度和力矩。默认正力矩会让角度和速度先变成正值。随着杆件抬起，重力恢复力矩与阻尼开始抵消电机力矩，所以速度不必一直增加。
 
 可以对比：
@@ -108,6 +170,6 @@ python experiments/001_single_joint_pd/run.py --torque -0.5
 python -m pytest tests/test_single_joint.py
 ```
 
-自动化测试使用无窗口模式，保证可重复并适合 CI；人工验收再使用 `--view` 观察动作。Phase 2 将加入 PD 控制与响应曲线。
+自动化测试使用无窗口模式，保证可重复并适合 CI；人工验收再使用 `--mode pd --view` 观察闭环动作、在中文面板实时修改参数。
 
 如果 Viewer 异常退出后终端把 `Ctrl+C` 显示成 `^C`，输入 `stty sane` 并按 Enter，或在 VS Code 中关闭该终端并新建一个。

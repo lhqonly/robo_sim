@@ -1,4 +1,4 @@
-"""Local Chinese learning panel for the Phase 1 single-joint experiment."""
+"""Local Chinese learning panel for the single-joint experiments."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import mujoco
+
+from robo_sim.controllers.pd import PDController
 
 
 PANEL_HTML = """<!doctype html>
@@ -48,8 +50,9 @@ PANEL_HTML = """<!doctype html>
 <main>
   <h1>LinkJoin 单关节学习面板</h1>
   <div class="muted">这是 MuJoCo Viewer 的中文辅助面板；只监听本机 127.0.0.1。</div>
+  <div id="modeBadge" class="status">正在读取控制模式……</div>
 
-  <section class="card">
+  <section id="torqueControl" class="card">
     <label for="watchField">Watch Field（观察变量）</label>
     <select id="watchField">
       <option value="qpos">qpos — 关节角度</option>
@@ -59,6 +62,27 @@ PANEL_HTML = """<!doctype html>
     </select>
     <div id="watchValue" class="watch-value">--</div>
     <div id="watchDescription" class="description"></div>
+  </section>
+
+  <section id="pdControl" class="card" hidden>
+    <h2 style="margin-top:0">PD 闭环参数</h2>
+    <div class="grid">
+      <div>
+        <label for="targetInput">目标角度（degree / °）</label>
+        <input id="targetInput" type="number" min="-120" max="120" step="0.1" />
+      </div>
+      <div>
+        <label for="kpInput">比例增益 Kp（N·m/rad）</label>
+        <input id="kpInput" type="number" min="0" max="200" step="0.1" />
+      </div>
+      <div>
+        <label for="kdInput">微分增益 Kd（N·m·s/rad）</label>
+        <input id="kdInput" type="number" min="0" max="50" step="0.1" />
+      </div>
+    </div>
+    <button id="applyPd" class="primary">应用目标与增益</button>
+    <div class="muted">Kp 像弹簧，把关节拉向目标；Kd 像阻尼，抑制速度和振荡。</div>
+    <div id="pdStatus" class="status"></div>
   </section>
 
   <section class="card">
@@ -81,13 +105,15 @@ PANEL_HTML = """<!doctype html>
       <div class="metric">关节角度 qpos<strong id="qpos">--</strong></div>
       <div class="metric">角速度 qvel<strong id="qvel">--</strong></div>
       <div class="metric">电机输入 ctrl<strong id="ctrl">--</strong></div>
+      <div id="errorMetric" class="metric" hidden>位置误差<strong id="positionError">--</strong></div>
+      <div id="rawTorqueMetric" class="metric" hidden>限幅前 PD 力矩<strong id="rawTorque">--</strong></div>
     </div>
-    <button id="reset" class="danger">重置姿态并清零扭矩</button>
+    <button id="reset" class="danger">重置姿态</button>
   </section>
 
   <section class="card muted">
     <strong style="color:#e5e7eb">最重要的关系</strong><br/>
-    <code>ctrl（输入扭矩） → MuJoCo 动力学 → qpos/qvel（角度与速度）</code><br/>
+    <code id="controlRelation">ctrl（输入扭矩） → MuJoCo 动力学 → qpos/qvel（角度与速度）</code><br/>
     关闭 3D Viewer 或在启动它的终端按 Ctrl+C，会同时关闭本面板服务。
   </section>
 </main>
@@ -111,12 +137,33 @@ function renderWatch() {
 }
 function renderState(state) {
   latest = state;
+  const pdMode = state.mode === 'pd';
+  $('modeBadge').textContent = pdMode
+    ? 'Phase 2：PD 闭环控制（根据误差实时改变扭矩）'
+    : 'Phase 1：恒扭矩开环控制';
+  $('torqueControl').hidden = pdMode;
+  $('pdControl').hidden = !pdMode;
+  $('errorMetric').hidden = !pdMode;
+  $('rawTorqueMetric').hidden = !pdMode;
   $('time').textContent = `${format(state.time, 3)} s`;
   $('qpos').textContent = `${format(state.qpos)} rad / ${format(state.qpos_deg, 2)}°`;
   $('qvel').textContent = `${format(state.qvel)} rad/s`;
   $('ctrl').textContent = `${format(state.ctrl, 3)} N·m`;
-  if (document.activeElement !== $('torqueInput')) $('torqueInput').value = format(state.ctrl, 3);
-  if (document.activeElement !== $('torqueSlider')) $('torqueSlider').value = state.ctrl;
+  if (pdMode) {
+    $('positionError').textContent = `${format(state.position_error_rad)} rad / ${format(state.position_error_deg, 2)}°`;
+    $('rawTorque').textContent = `${format(state.raw_torque_nm, 3)} N·m`;
+    $('pdStatus').textContent = state.saturated
+      ? '当前已触及 ±2 N·m 力矩限幅（橙色杆不会得到更大的力矩）'
+      : '当前力矩未触及限幅';
+    if (document.activeElement !== $('targetInput')) $('targetInput').value = format(state.target_position_deg, 2);
+    if (document.activeElement !== $('kpInput')) $('kpInput').value = format(state.kp, 2);
+    if (document.activeElement !== $('kdInput')) $('kdInput').value = format(state.kd, 2);
+    $('controlRelation').textContent = '目标角度 − qpos → PD 控制器 → ctrl → MuJoCo → 新的 qpos/qvel';
+    definitions.ctrl.text = 'PD 控制器根据角度/速度误差实时算出的电机扭矩；原生 Viewer 紫色滑块会被控制器持续更新。';
+  } else {
+    if (document.activeElement !== $('torqueInput')) $('torqueInput').value = format(state.ctrl, 3);
+    if (document.activeElement !== $('torqueSlider')) $('torqueSlider').value = state.ctrl;
+  }
   renderWatch();
 }
 async function refresh() {
@@ -140,11 +187,24 @@ async function setTorque(value) {
     await refresh();
   } catch (error) { $('status').textContent = error.message; }
 }
+async function setPd() {
+  try {
+    const result = await post('/api/pd', {
+      target_deg: Number($('targetInput').value),
+      kp: Number($('kpInput').value),
+      kd: Number($('kdInput').value)
+    });
+    $('pdStatus').textContent = `已应用：目标 ${format(result.target_position_deg, 2)}°，Kp=${format(result.kp, 2)}，Kd=${format(result.kd, 2)}`;
+    await refresh();
+  } catch (error) { $('pdStatus').textContent = error.message; }
+}
 $('watchField').addEventListener('change', renderWatch);
 $('applyTorque').addEventListener('click', () => setTorque($('torqueInput').value));
 $('torqueInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') setTorque(event.target.value); });
 $('torqueSlider').addEventListener('change', (event) => setTorque(event.target.value));
 document.querySelectorAll('[data-torque]').forEach((button) => button.addEventListener('click', () => setTorque(button.dataset.torque)));
+$('applyPd').addEventListener('click', setPd);
+[$('targetInput'), $('kpInput'), $('kdInput')].forEach((input) => input.addEventListener('keydown', (event) => { if (event.key === 'Enter') setPd(); }));
 $('reset').addEventListener('click', async () => { await post('/api/reset'); $('status').textContent = '已重置'; await refresh(); });
 refresh();
 setInterval(refresh, 120);
@@ -164,11 +224,13 @@ class LearningPanelServer:
         joint_id: int,
         actuator_id: int,
         port: int = 0,
+        pd_controller: PDController | None = None,
     ) -> None:
         self.model = model
         self.data = data
         self.joint_id = joint_id
         self.actuator_id = actuator_id
+        self.pd_controller = pd_controller
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer(
             ("127.0.0.1", port), self._make_handler_type()
@@ -197,12 +259,12 @@ class LearningPanelServer:
             self._thread.join(timeout=2)
             self._thread = None
 
-    def snapshot(self) -> dict[str, float]:
+    def snapshot(self) -> dict[str, float | str | bool]:
         qpos_address = self.model.jnt_qposadr[self.joint_id]
         qvel_address = self.model.jnt_dofadr[self.joint_id]
         with self._lock:
             qpos = float(self.data.qpos[qpos_address])
-            return {
+            snapshot: dict[str, float | str | bool] = {
                 "time": float(self.data.time),
                 "qpos": qpos,
                 "qpos_deg": qpos * 180.0 / 3.141592653589793,
@@ -211,9 +273,34 @@ class LearningPanelServer:
                 "actuator_force": float(
                     self.data.actuator_force[self.actuator_id]
                 ),
+                "mode": "pd" if self.pd_controller is not None else "torque",
             }
+        if self.pd_controller is not None:
+            output = self.pd_controller.compute(
+                position_rad=float(snapshot["qpos"]),
+                velocity_rad_s=float(snapshot["qvel"]),
+            )
+            settings = self.pd_controller.settings()
+            target_rad = settings["target_position_rad"]
+            snapshot.update(
+                {
+                    "kp": settings["kp"],
+                    "kd": settings["kd"],
+                    "target_position_rad": target_rad,
+                    "target_position_deg": target_rad * 180.0 / 3.141592653589793,
+                    "position_error_rad": output.position_error_rad,
+                    "position_error_deg": output.position_error_rad
+                    * 180.0
+                    / 3.141592653589793,
+                    "raw_torque_nm": output.raw_torque_nm,
+                    "saturated": output.saturated,
+                }
+            )
+        return snapshot
 
     def set_torque(self, value: float) -> float:
+        if self.pd_controller is not None:
+            raise ValueError("PD 模式下扭矩由控制器计算，请修改目标角度、Kp 或 Kd")
         control_min, control_max = self.model.actuator_ctrlrange[self.actuator_id]
         if not control_min <= value <= control_max:
             raise ValueError(
@@ -222,6 +309,33 @@ class LearningPanelServer:
         with self._lock:
             self.data.ctrl[self.actuator_id] = value
         return value
+
+    def set_pd(self, target_deg: float, kp: float, kd: float) -> dict[str, float]:
+        if self.pd_controller is None:
+            raise ValueError("当前不是 PD 控制模式")
+        target_rad = target_deg * 3.141592653589793 / 180.0
+        joint_min, joint_max = self.model.jnt_range[self.joint_id]
+        if not joint_min <= target_rad <= joint_max:
+            raise ValueError(
+                f"目标角度必须在 {joint_min * 180 / 3.141592653589793:.1f}° "
+                f"到 {joint_max * 180 / 3.141592653589793:.1f}° 之间"
+            )
+        if kp > 200:
+            raise ValueError("Kp 不能大于 200")
+        if kd > 50:
+            raise ValueError("Kd 不能大于 50")
+        self.pd_controller.update(
+            kp=kp, kd=kd, target_position_rad=target_rad
+        )
+        settings = self.pd_controller.settings()
+        return {
+            "target_position_rad": settings["target_position_rad"],
+            "target_position_deg": settings["target_position_rad"]
+            * 180.0
+            / 3.141592653589793,
+            "kp": settings["kp"],
+            "kd": settings["kd"],
+        }
 
     def reset(self) -> None:
         with self._lock:
@@ -248,6 +362,14 @@ class LearningPanelServer:
                     if self.path == "/api/torque":
                         value = panel.set_torque(float(body["value"]))
                         self._send_json({"ctrl": value})
+                    elif self.path == "/api/pd":
+                        self._send_json(
+                            panel.set_pd(
+                                float(body["target_deg"]),
+                                float(body["kp"]),
+                                float(body["kd"]),
+                            )
+                        )
                     elif self.path == "/api/reset":
                         panel.reset()
                         self._send_json({"ok": True})
@@ -284,7 +406,12 @@ class LearningPanelServer:
                 self.send_header("Content-Length", str(len(payload)))
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
-                self.wfile.write(payload)
+                try:
+                    self.wfile.write(payload)
+                except (BrokenPipeError, ConnectionResetError):
+                    # A readiness probe may close its short-lived connection
+                    # before the response reaches the socket.
+                    return
 
             def log_message(self, format: str, *args: object) -> None:
                 return

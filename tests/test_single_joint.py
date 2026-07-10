@@ -59,3 +59,39 @@ def test_single_joint_experiment_runs_headless() -> None:
     assert "velocity_rad_s" in completed.stdout
     assert "torque_nm" in completed.stdout
     assert "Final state" in completed.stdout
+
+
+def test_pd_experiment_tracks_target_and_saves_response_plot(tmp_path: Path) -> None:
+    plot_path = tmp_path / "pd_response.png"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(RUN_PATH),
+            "--mode",
+            "pd",
+            "--target-deg",
+            "30",
+            "--kp",
+            "30",
+            "--kd",
+            "3",
+            "--duration",
+            "3",
+            "--samples",
+            "4",
+            "--plot",
+            str(plot_path),
+        ],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "PD closed-loop experiment (Phase 2)" in completed.stdout
+    assert "target_deg" in completed.stdout
+    assert "Final tracking error" in completed.stdout
+    assert "Plot saved:" in completed.stdout
+    assert plot_path.is_file()
+    assert plot_path.stat().st_size > 10_000
