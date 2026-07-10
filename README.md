@@ -44,8 +44,6 @@ python experiments/001_single_joint_pd/run.py \
   --view --torque 1.0
 ```
 
-`--view` 会同时打开官方 3D Viewer 和中文学习控制面板。学习面板提供 Watch 下拉框、实时中文解释、精确扭矩数字输入、滑块和预设按钮。若不想自动打开浏览器，可添加 `--no-browser`，再访问终端打印的本地 URL。
-
 ## 目录导览
 
 ```text

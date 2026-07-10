@@ -32,40 +32,12 @@ python experiments/001_single_joint_pd/run.py \
 
 Viewer 中蓝色方块是固定基座，黄色圆柱是简化的关节/电机位置，橙色杆是运动连杆。拖动鼠标可以旋转视角，滚轮可以缩放。GUI 会一直运行，关闭 Viewer 窗口或先点击终端再按 `Ctrl+C` 才退出。GUI 在隔离的子进程中运行，因此其原生窗口清理不会占住终端。
 
-同时会自动打开一个浏览器中文学习面板。它只监听本机 `127.0.0.1`，关闭 Viewer 或按 `Ctrl+C` 后服务随即停止。
-
-### 中文学习面板
-
-原生 Viewer 的 `Watch.Field` 是自由文本，原生 `joint_motor` 也是只有滑块的固定控件；Python Viewer API 不能直接把它们替换为自定义控件。因此项目增加了一个与同一份 MuJoCo `data` 实时同步的辅助面板：
-
-- Watch 下拉框：`qpos`（关节角度）、`qvel`（角速度）、`ctrl`（指令扭矩）、`actuator_force`（实际输出）。
-- 每个字段显示中文含义、单位和实时值。
-- 精确扭矩输入框：可键入例如 `1.234`，按 Enter 或点击“应用精确值”。
-- 快速滑块与 `-2/-1/-0.5/0/+0.5/+1/+2` 预设按钮。
-- 重置按钮：恢复初始姿态并清零扭矩。
-
-原生 Viewer 的紫色 Control 和中文面板控制的是同一个 `data.ctrl[0]`，任一侧修改都会在另一侧体现。
-
-如果浏览器没有自动打开，复制终端输出，例如：
-
-```text
-Chinese learning panel: http://127.0.0.1:53017/
-```
-
-也可以禁止自动打开浏览器：
-
-```bash
-python experiments/001_single_joint_pd/run.py \
-  --view --torque 1.0 --no-browser
-```
-
 参数：
 
 - `--torque`：恒定电机力矩，单位 N·m，允许范围 `[-2, 2]`。
 - `--duration`：无窗口模式的仿真时间，单位 s，必须大于 0。
 - `--samples`：无窗口模式打印多少个等间隔状态，至少为 2。
 - `--view`：打开交互式 GUI，忽略 `--duration/--samples`，直到人工退出；不加时采用无窗口快速运行。
-- `--no-browser`：仍启动中文学习面板服务，但不自动打开浏览器。
 
 ## 为什么做这个实验
 
