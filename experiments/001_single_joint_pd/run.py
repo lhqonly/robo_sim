@@ -117,92 +117,6 @@ def evenly_spaced_samples(
     return [samples[round(index * last / (sample_count - 1))] for index in range(sample_count)]
 
 
-def save_pd_response_plot(samples: list[PDSample], output_path: Path) -> None:
-    """Save position, velocity, and torque histories as a PNG."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    from matplotlib import pyplot as plt
-
-    times = [sample.time_s for sample in samples]
-    positions_deg = [math.degrees(sample.position_rad) for sample in samples]
-    targets_deg = [math.degrees(sample.target_position_rad) for sample in samples]
-    velocities_deg_s = [
-        math.degrees(sample.velocity_rad_s) for sample in samples
-    ]
-    raw_torques = [sample.raw_torque_nm for sample in samples]
-    torques = [sample.torque_nm for sample in samples]
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    figure, axes = plt.subplots(3, 1, figsize=(9, 9), sharex=True)
-    axes[0].plot(times, targets_deg, "--", label="target")
-    axes[0].plot(times, positions_deg, label="actual")
-    axes[0].set_ylabel("Angle (deg)")
-    axes[0].legend()
-    axes[0].grid(alpha=0.3)
-    axes[1].plot(times, velocities_deg_s, color="tab:green")
-    axes[1].axhline(0.0, color="black", linewidth=0.7)
-    axes[1].set_ylabel("Velocity (deg/s)")
-    axes[1].grid(alpha=0.3)
-    axes[2].plot(times, raw_torques, ":", color="tab:gray", label="raw PD")
-    axes[2].plot(times, torques, color="tab:orange", label="applied")
-    axes[2].axhline(2.0, color="tab:red", linestyle="--", linewidth=0.8)
-    axes[2].axhline(-2.0, color="tab:red", linestyle="--", linewidth=0.8)
-    axes[2].set_ylabel("Torque (N m)")
-    axes[2].set_xlabel("Time (s)")
-    axes[2].legend()
-    axes[2].grid(alpha=0.3)
-    figure.suptitle("Single-joint PD closed-loop response")
-    figure.tight_layout()
-    figure.savefig(output_path, dpi=150)
-    plt.close(figure)
-
-
-def save_gain_comparison_plot(
-    *, target_position_rad: float, duration_s: float, output_path: Path
-) -> None:
-    """Compare a weak, underdamped, and balanced set of gains."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    from matplotlib import pyplot as plt
-
-    profiles = [
-        ("weak: Kp=8, Kd=1", 8.0, 1.0),
-        ("low damping: Kp=30, Kd=0.2", 30.0, 0.2),
-        ("balanced: Kp=30, Kd=3", 30.0, 3.0),
-        ("high damping: Kp=30, Kd=20", 30.0, 20.0),
-    ]
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    figure, axis = plt.subplots(figsize=(9, 5))
-    for label, kp, kd in profiles:
-        samples = simulate_pd(
-            target_position_rad=target_position_rad,
-            kp=kp,
-            kd=kd,
-            duration_s=duration_s,
-        )
-        axis.plot(
-            [sample.time_s for sample in samples],
-            [math.degrees(sample.position_rad) for sample in samples],
-            label=label,
-        )
-    axis.axhline(
-        math.degrees(target_position_rad),
-        color="black",
-        linestyle="--",
-        label="target",
-    )
-    axis.set_xlabel("Time (s)")
-    axis.set_ylabel("Angle (deg)")
-    axis.set_title("How Kp and Kd change the response")
-    axis.grid(alpha=0.3)
-    axis.legend()
-    figure.tight_layout()
-    figure.savefig(output_path, dpi=150)
-    plt.close(figure)
-
-
 def simulate_constant_torque(
     torque_nm: float, duration_s: float, sample_count: int
 ) -> list[Sample]:
@@ -551,31 +465,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=3.0,
         help="PD derivative gain in N·m·s/rad (default: 3)",
     )
-    parser.add_argument(
-        "--plot",
-        type=Path,
-        default=PROJECT_ROOT
-        / "experiments"
-        / "001_single_joint_pd"
-        / "results"
-        / "pd_response.png",
-        help="PD response PNG path",
-    )
-    parser.add_argument(
-        "--compare",
-        action="store_true",
-        help="also generate a Kp/Kd gain comparison",
-    )
-    parser.add_argument(
-        "--comparison-plot",
-        type=Path,
-        default=PROJECT_ROOT
-        / "experiments"
-        / "001_single_joint_pd"
-        / "results"
-        / "pd_gain_comparison.png",
-        help=argparse.SUPPRESS,
-    )
     parser.add_argument("--control-port", type=int, default=0, help=argparse.SUPPRESS)
     return parser
 
@@ -633,13 +522,6 @@ def main() -> int:
                 duration_s=args.duration,
             )
             printed_samples = evenly_spaced_samples(pd_samples, args.samples)
-            save_pd_response_plot(pd_samples, args.plot)
-            if args.compare:
-                save_gain_comparison_plot(
-                    target_position_rad=target_position_rad,
-                    duration_s=max(args.duration, 3.0),
-                    output_path=args.comparison_plot,
-                )
         except ValueError as exc:
             parser.error(str(exc))
 
@@ -667,9 +549,6 @@ def main() -> int:
             f"{final_pd.position_error_rad:.6f} rad / "
             f"{math.degrees(final_pd.position_error_rad):.3f} deg"
         )
-        print(f"Plot saved: {args.plot}")
-        if args.compare:
-            print(f"Gain comparison saved: {args.comparison_plot}")
         return 0
 
     try:

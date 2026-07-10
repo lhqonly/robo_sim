@@ -100,10 +100,12 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert "比例增益 Kp" in html
         assert "实时响应曲线" in html
         assert 'id="angleChart"' in html
-        assert "为什么没有完全到达目标" in html
+        assert "为什么停在这里，没有到目标" in html
+        assert "PD 是 PID 里的 P + D" in html
+        assert "请在 MuJoCo Viewer 左侧 Simulation 区域点击 Run" in html
         assert "[hidden] { display: none !important; }" in html
         assert '<section id="watchControl"' in html
-        assert '<section id="torqueControl"' in html
+        assert '<section id="torqueControl" class="card" hidden>' in html
 
         result = post_json(
             panel.url + "api/pd",

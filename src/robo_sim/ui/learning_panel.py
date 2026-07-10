@@ -93,11 +93,11 @@ PANEL_HTML = """<!doctype html>
       </div>
     </div>
     <button id="applyPd" class="primary">应用目标与增益</button>
-    <div class="muted">Kp 像弹簧，把关节拉向目标；Kd 像阻尼，抑制速度和振荡。</div>
+    <div class="muted">PD 是 PID 里的 P + D：P 看“还差多远”，D 看“现在动得多快”并负责刹车。I 会累积长期误差，后续单独学习。</div>
     <div id="pdStatus" class="status"></div>
   </section>
 
-  <section id="torqueControl" class="card">
+  <section id="torqueControl" class="card" hidden>
     <label for="torqueInput">joint_motor 精确扭矩输入（N·m）</label>
     <input id="torqueInput" type="number" min="-2" max="2" step="0.01" value="0" />
     <button id="applyTorque" class="primary">应用精确值</button>
@@ -124,11 +124,11 @@ PANEL_HTML = """<!doctype html>
   </section>
 
   <section id="pdInsightCard" class="card" hidden>
-    <h2 style="margin-top:0">为什么没有完全到达目标？</h2>
+    <h2 style="margin-top:0">为什么停在这里，没有到目标？</h2>
     <div id="equilibriumExplanation" class="insight">正在计算重力与 PD 平衡……</div>
     <div class="grid" style="margin-top:12px">
-      <div class="metric">目标姿态保持力矩<strong id="targetHoldTorque">--</strong></div>
-      <div class="metric">当前位置偏置/重力矩<strong id="biasTorque">--</strong></div>
+      <div class="metric">停在目标需要的力矩<strong id="targetHoldTorque">--</strong></div>
+      <div class="metric">停在当前位置需要的力矩<strong id="biasTorque">--</strong></div>
       <div class="metric">P 项：Kp × 位置误差<strong id="pTorque">--</strong></div>
       <div class="metric">D 项：Kd × 速度误差<strong id="dTorque">--</strong></div>
     </div>
@@ -137,6 +137,7 @@ PANEL_HTML = """<!doctype html>
   <section id="responseCard" class="card" hidden>
     <h2 style="margin:0">实时响应曲线</h2>
     <div class="muted">记录最近 30 秒。修改目标时，绿色虚线会形成阶跃，可直接观察实际角度如何追踪。</div>
+    <div id="curveStatus" class="status">正在等待仿真数据……</div>
     <button id="toggleRecording">暂停记录</button>
     <button id="clearCharts">清空曲线</button>
 
@@ -180,6 +181,7 @@ let latest = null;
 let responseHistory = [];
 let recording = true;
 let lastRecordedTime = null;
+let lastAdvanceWallTime = Date.now();
 const $ = (id) => document.getElementById(id);
 
 function format(value, digits=6) { return Number(value).toFixed(digits); }
@@ -222,12 +224,14 @@ function renderState(state) {
     $('controlRelation').textContent = '目标角度 − qpos → PD 控制器 → ctrl → MuJoCo → 新的 qpos/qvel';
     definitions.ctrl.text = 'PD 控制器根据角度/速度误差实时算出的电机扭矩；原生 Viewer 紫色滑块会被控制器持续更新。';
     const withinLimit = Math.abs(state.target_hold_torque_nm) <= 2;
+    const torquePerDegree = state.kp * Math.PI / 180;
     $('equilibriumExplanation').textContent =
-      `目标 ${format(state.target_position_deg, 1)}° 需要约 ${format(state.target_hold_torque_nm, 3)} N·m ` +
-      `才能抵抗重力（${withinLimit ? '在电机能力内' : '已超出电机能力'}）。` +
-      `但纯 PD 在完全到达目标时误差和速度都为 0，因此 P、D 输出也会变成 0。` +
-      `当前保留 ${format(state.position_error_deg, 2)}° 误差，P 项 ${format(state.proportional_torque_nm, 3)} N·m ` +
-      `与当前位置所需的 ${format(state.bias_torque_nm, 3)} N·m 基本平衡，所以会停在这里。`;
+      `想停在 ${format(state.target_position_deg, 1)}°，电机需要持续提供约 ${format(state.target_hold_torque_nm, 3)} N·m，` +
+      `${withinLimit ? '这个数没有超过电机上限。' : '这个数已经超过电机上限。'}` +
+      `但纯 PD 一旦完全到达目标，误差就变成 0，它反而会命令电机输出 0，杆就会被重力拉回来。` +
+      `现在 Kp=${format(state.kp, 1)}，每相差 1° 只能增加约 ${format(torquePerDegree, 3)} N·m。` +
+      `小误差产生的力气不够，所以必须退到相差 ${format(Math.abs(state.position_error_deg), 2)}°，` +
+      `此时 P 项达到 ${format(state.proportional_torque_nm, 3)} N·m，刚好托住当前位置，杆才停下。`;
     appendResponsePoint(state);
   } else {
     if (document.activeElement !== $('torqueInput')) $('torqueInput').value = format(state.ctrl, 3);
@@ -245,7 +249,14 @@ function clearResponseHistory() {
 function appendResponsePoint(state) {
   if (!recording) return;
   if (lastRecordedTime !== null && state.time < lastRecordedTime) clearResponseHistory();
-  if (lastRecordedTime !== null && Math.abs(state.time - lastRecordedTime) < 1e-6) return;
+  if (lastRecordedTime !== null && Math.abs(state.time - lastRecordedTime) < 1e-6) {
+    if (Date.now() - lastAdvanceWallTime > 1000) {
+      $('curveStatus').textContent = '仿真现在是暂停状态：请在 MuJoCo Viewer 左侧 Simulation 区域点击 Run。';
+    }
+    return;
+  }
+  lastAdvanceWallTime = Date.now();
+  $('curveStatus').textContent = '正在记录动态曲线';
   lastRecordedTime = state.time;
   responseHistory.push({
     time: state.time,
@@ -392,6 +403,7 @@ $('applyPd').addEventListener('click', setPd);
 $('toggleRecording').addEventListener('click', () => {
   recording = !recording;
   $('toggleRecording').textContent = recording ? '暂停记录' : '继续记录';
+  $('curveStatus').textContent = recording ? '继续记录动态曲线' : '网页已暂停记录（MuJoCo 仿真仍可继续运行）';
 });
 $('clearCharts').addEventListener('click', clearResponseHistory);
 $('reset').addEventListener('click', async () => {

@@ -10,9 +10,8 @@ __pycache__/
 build/
 dist/
 
-# Generated experiment data and figures
+# Generated experiment data
 experiments/**/results/*
-!experiments/**/results/.gitkeep
 
 # Local editor and OS files
 .vscode/

@@ -17,28 +17,25 @@
 
 ### Phase 2：PD 闭环控制（当前建议）
 
-先运行 3 秒无窗口仿真并生成响应曲线：
+打开 3D Viewer 和中文网页动态响应曲线：
 
 ```bash
 cd ~/robo_sim
 source .venv/bin/activate
 python experiments/001_single_joint_pd/run.py \
-  --mode pd --target-deg 30 --kp 30 --kd 3 \
-  --duration 3 --samples 7 --compare
+  --mode pd --view --target-deg 30 --kp 30 --kd 3
 ```
 
-会生成（生成物不提交 Git）：
+响应曲线只在网页中实时显示，不再生成静态 PNG。网页会保留最近 30 秒数据，修改目标后可以直接看到目标线发生变化，以及实际角度如何跟过去。
 
-```text
-experiments/001_single_joint_pd/results/pd_response.png
-experiments/001_single_joint_pd/results/pd_gain_comparison.png
-```
+如果网页提示“仿真现在是暂停状态”或曲线不动，请在 MuJoCo Viewer 左侧 `Simulation` 区域点击 `Run`；网页暂停记录和 MuJoCo 暂停仿真是两个不同开关。
 
-打开 3D Viewer 和中文 PD 面板：
+只想快速运行数值验证、不打开窗口时：
 
 ```bash
 python experiments/001_single_joint_pd/run.py \
-  --mode pd --view --target-deg 30 --kp 30 --kd 3
+  --mode pd --target-deg 30 --kp 30 --kd 3 \
+  --duration 3 --samples 7
 ```
 
 中文面板可以在 Viewer 运行时精确修改目标角度、`Kp` 和 `Kd`。PD 模式下，原生 Viewer 右侧紫色 `joint_motor` 不再是手动输入，而是控制器每个时间步算出的输出；即使拖动，也会立即被控制器覆盖。
@@ -91,6 +88,7 @@ Viewer 中蓝色方块是固定基座，黄色圆柱是简化的关节/电机位
 - 当前误差、限幅前 PD 力矩，以及是否触及执行器上限。
 - “为什么没有完全到达目标”解释卡：同时显示目标姿态保持力矩、当前位置重力/偏置矩、P 项和 D 项。
 - 最近 30 秒的三张实时响应曲线：目标/实际角度、角速度、限幅前/实际控制力矩；支持暂停记录和清空。
+- 不显示 `joint_motor` 手动输入。PD 模式的力矩由控制器自动计算，用户只需要修改目标角度、`Kp` 和 `Kd`。
 
 恒扭矩模式下，原生 Viewer 的紫色 Control 和中文面板控制同一个 `data.ctrl[0]`。PD 模式下，它们仍显示同一个值，但该值是控制器输出；需要在中文面板修改目标或增益，而不是拖动紫色滑块。
 
@@ -115,8 +113,6 @@ python experiments/001_single_joint_pd/run.py \
 - `--kp` / `--kd`：PD 比例/微分增益，必须非负。
 - `--duration`：无窗口模式的仿真时间，单位 s，必须大于 0。
 - `--samples`：无窗口模式打印多少个等间隔状态，至少为 2。
-- `--plot`：PD 三联响应图保存路径。
-- `--compare`：额外生成四组 `Kp/Kd` 参数对比图。
 - `--view`：打开交互式 GUI，忽略 `--duration/--samples`，直到人工退出；不加时采用无窗口快速运行。
 - `--no-browser`：仍启动中文学习面板服务，但不自动打开浏览器。
 
@@ -155,7 +151,7 @@ angle ≈ 0.420 rad ≈ 24.1°
 
 例如设置目标 `-45°`、`Kp=5`、`Kd=3`：保持在 `-45°` 需要约 `-1.734 N·m`，虽然没有超过电机的 `-2 N·m` 下限，但纯 PD 在目标处的误差为 0，因此输出也会变成 0。最终会停在约 `-30.7°`，此时约 `-14.3°` 的误差通过 `Kp` 产生约 `-1.25 N·m`，恰好抵消当前位置的重力矩。提高 `Kp` 能缩小这个误差，但若要在较小 `Kp` 下仍准确保持目标，需要后续加入重力补偿或积分项。
 
-Viewer 运行时，实时曲线就在中文面板的状态卡下方。修改目标角度后，不要清空曲线：绿色目标线会出现阶跃，蓝色实际角度线随后追踪过去，这就是最直观的闭环响应实验。无窗口模式生成的静态 PNG 仍保存在 `results/pd_response.png`。
+Viewer 运行时，实时曲线就在中文面板的状态卡下方。修改目标角度后，不要清空曲线：绿色目标线会出现阶跃，蓝色实际角度线随后追踪过去，这就是最直观的闭环响应实验。关闭 Viewer 后这些临时曲线随页面一起结束，不生成静态图片。
 
 ### Phase 1 输出
 

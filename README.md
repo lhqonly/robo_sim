@@ -6,7 +6,7 @@ LinkJoin Robo SIM 是一个面向初学者的学习型工程：用仿真逐步�
 
 ## 当前状态
 
-Phase 1（单关节恒力矩）和 Phase 2（PD 闭环控制）已完成：可以在原生 MuJoCo Viewer + 中文面板中观察反馈控制，也可以生成角度、速度、力矩响应曲线与参数对比图。下一阶段是膝关节/小腿摆杆和重力矩。
+Phase 1（单关节恒力矩）和 Phase 2（PD 闭环控制）已完成：可以在原生 MuJoCo Viewer + 中文面板中观察反馈控制，并在网页中实时查看角度、速度和力矩响应曲线。下一阶段是膝关节/小腿摆杆和重力矩。
 
 权威路线图见 [`docs/work_plan.md`](docs/work_plan.md)，完成记录见 [`docs/progress_log.md`](docs/progress_log.md)。
 
@@ -30,15 +30,15 @@ python -m pytest
 
 环境检查会验证 Python 版本、核心依赖、项目包导入，以及 MuJoCo 是否能编译一个最小模型；它不会打开图形窗口。
 
-运行 PD 闭环实验并生成响应曲线：
+运行无窗口 PD 闭环实验并查看数值：
 
 ```bash
 python experiments/001_single_joint_pd/run.py \
   --mode pd --target-deg 30 --kp 30 --kd 3 \
-  --duration 3 --samples 7 --compare
+  --duration 3 --samples 7
 ```
 
-在 WSLg 中打开 MuJoCo Viewer，实时观察并调节参数：
+在 WSLg 中打开 Viewer 和网页动态响应曲线：
 
 ```bash
 python experiments/001_single_joint_pd/run.py \
