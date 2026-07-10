@@ -1,5 +1,23 @@
 # Progress Log
 
+## 2026-07-10 — Phase 1：中文学习控制面板
+
+### 需求与约束
+
+原生 Viewer 的 `Watch.Field` 需要手输，Control 只有滑块，且 Python `viewer.Handle` 不开放原生 UI 控件注入。实验性 Studio 虽支持自定义 ImGui，但实测当前 WSLg 下 `SIGINT` 会 abort，内置字体也不包含中文，因此不作为默认学习入口。
+
+### 实现
+
+- 新增仅监听 `127.0.0.1` 的浏览器学习面板，与 Viewer worker 内同一份 `mjData` 实时同步。
+- Watch 使用 `qpos/qvel/ctrl/actuator_force` 下拉框，并显示中文含义和单位。
+- `joint_motor` 增加精确数字输入、滑块、常用预设值以及越界校验。
+- 增加实时状态卡、角度制换算与姿态/扭矩重置。
+- Viewer 关闭或 Ctrl+C 时同步停止本地 HTTP 服务；支持 `--no-browser`。
+
+### 验证
+
+API 自动化验证精确写入 `1.234 N·m`、实时状态读取、越界拒绝和重置；真实 Viewer 联调返回 `ctrl=1.234`、`actuator_force=1.234`，关节 `qpos/qvel` 随之变化。完整项目测试为 `5 passed`，Viewer + 中文面板 + Ctrl+C 生命周期复验通过且无遗留进程。
+
 ## 2026-07-10 — Phase 1：单关节与恒力矩实验
 
 ### 目标
