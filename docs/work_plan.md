@@ -58,7 +58,7 @@ models/single_joint/single_joint.xml
 experiments/001_single_joint_pd/run.py
 ```
 
-验收：无图形界面也能运行自动化验证，WSLg 环境可通过 `--view` 实时观察动作；打印位置、速度和控制力矩；对应概念写入 `docs/concepts.md`。
+验收：无图形界面也能运行自动化验证，WSLg 环境可通过 `--view` 持续观察动作并由用户主动退出；打印位置、速度和控制力矩；对应概念写入 `docs/concepts.md`。
 
 完成结果（2026-07-10）：模型包含固定基座、单自由度 hinge、1 kg 杆件和力矩范围 `[-2, 2] N·m` 的 motor；恒力矩 CLI 会按时间打印 `position`、`velocity` 和 `torque`，支持 `--view` GUI 演示，模型结构/运动与 headless CLI 均有自动化测试。
 

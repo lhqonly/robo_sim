@@ -41,7 +41,7 @@ python experiments/001_single_joint_pd/run.py \
 
 ```bash
 python experiments/001_single_joint_pd/run.py \
-  --view --torque 1.0 --duration 5
+  --view --torque 1.0
 ```
 
 ## 目录导览

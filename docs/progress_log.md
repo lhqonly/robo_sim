@@ -15,7 +15,11 @@
 
 ### 验证结果
 
-默认实验施加 `0.5 N·m`、运行 1 s：关节从 `0 rad` 运动到约 `0.143473 rad`，最终速度约 `0.078950 rad/s`。Phase 1 新增测试为 `2 passed`，项目完整测试为 `4 passed`；零力矩保持静止，负力矩产生方向相反的运动。当前环境检测到 `DISPLAY=:0`、Wayland 与 `/mnt/wslg`；已实际启动 `--view` 运行 2 s，MuJoCo Viewer 正常显示并实时推进模型。
+默认实验施加 `0.5 N·m`、运行 1 s：关节从 `0 rad` 运动到约 `0.143473 rad`，最终速度约 `0.078950 rad/s`。Phase 1 新增测试为 `2 passed`，项目完整测试为 `4 passed`；零力矩保持静止，负力矩产生方向相反的运动。当前环境检测到 `DISPLAY=:0`、Wayland 与 `/mnt/wslg`，支持 GUI 人工视觉验收。
+
+### GUI 交互修订
+
+首版 passive Viewer 会在 `--duration` 到期后自动销毁窗口；在 WSLg + PTY 复验中捕获到原生退出阶段 segmentation fault，尽管 `stty` 前后配置一致，仍可能造成终端看似无法退出。现由主进程保留终端和信号控制权，在隔离子进程中运行 MuJoCo managed Viewer：GUI 不再按秒自动关闭，用户关闭窗口或按 `Ctrl+C` 才退出；主进程收到 Ctrl+C 后会终止/必要时强制结束 GUI 子进程。已用真实 `SIGINT` 验证退出信息和终端恢复路径。启动时会直接解释三种颜色、输入力矩和理论平衡角度。
 
 ### 下一步
 
