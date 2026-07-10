@@ -38,6 +38,19 @@ else
   echo "Reusing virtual environment at ${VENV_DIR}"
 fi
 
+if [[ ! -f "${VENV_DIR}/bin/activate" ]]; then
+  echo "The venv module stopped before creating activation scripts; repairing them."
+  if ! "${PYTHON_BIN}" -m venv --without-pip "${VENV_DIR}"; then
+    echo "Error: activation scripts could not be created in ${VENV_DIR}." >&2
+    exit 1
+  fi
+fi
+
+if [[ ! -f "${VENV_DIR}/bin/activate" ]]; then
+  echo "Error: ${VENV_DIR}/bin/activate is still missing after repair." >&2
+  exit 1
+fi
+
 if ! "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
   echo "The venv module did not bundle pip; bootstrapping it with the host pip."
   if ! "${PYTHON_BIN}" -m pip --python "${VENV_DIR}/bin/python" install --upgrade pip; then

@@ -1,5 +1,19 @@
 # Progress Log
 
+## 2026-07-10 — 修复不完整虚拟环境
+
+### 现象
+
+运行 `source .venv/bin/activate` 报告文件不存在。随后执行的 `python` 实际来自 `/opt/rk-toolchain/bin/python`，因缺少 `libpython2.7.so.1.0` 失败；`pytest` 则来自用户级全局安装，而不是项目环境。
+
+### 根因与修复
+
+当前 Ubuntu 缺少 `python3.12-venv` 的 `ensurepip` 组件。`python3 -m venv` 在生成激活脚本之前失败，但留下了 Python 软链接，旧版 setup 脚本因此把半成品误判为完整环境。现在 setup 脚本会显式检查 `bin/activate`，缺失时用 `venv --without-pip` 补齐脚本，再定向引导 pip；修复后仍缺失则立即报错。
+
+### 验证
+
+在新的 Bash shell 中激活成功，`python` 和 `pytest` 均指向 `/home/lhq24/robo_sim/.venv/bin/`；环境检查通过，pytest 结果为 `2 passed`。
+
 ## 2026-07-10 — Phase 0：工程初始化
 
 ### 目标
@@ -22,7 +36,7 @@
 
 ### 验证
 
-虚拟环境已经创建，所有依赖已安装。当前 Ubuntu 缺少 `python3.12-venv` 的 `ensurepip` 组件，且当前用户没有免密 sudo；安装脚本已验证可使用宿主 pip 的 `--python` 选项，只把 pip 引导进项目 `.venv`，没有向系统 Python 安装项目依赖。
+虚拟环境已经创建，所有依赖已安装。当前 Ubuntu 缺少 `python3.12-venv` 的 `ensurepip` 组件，且当前用户没有免密 sudo；安装脚本会用 `venv --without-pip` 补齐激活脚本，再使用宿主 pip 的 `--python` 选项，只把 pip 引导进项目 `.venv`，没有向系统 Python 安装项目依赖。
 
 实际验收结果：
 

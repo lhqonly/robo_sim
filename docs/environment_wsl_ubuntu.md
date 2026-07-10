@@ -86,6 +86,7 @@ git push -u origin main
 ## 6. 常见问题
 
 - `No module named ...`：确认已激活 `.venv`，并用 `which python` 检查是否指向项目目录。
-- `ensurepip is not available`：安装 `python3-venv` 后删除未完成的 `.venv`，再运行 setup 脚本。
+- `source .venv/bin/activate: No such file or directory`：运行 `bash scripts/setup_env.sh`；脚本会修复 Ubuntu 缺少 `ensurepip` 时留下的不完整环境。
+- `ensurepip is not available`：setup 脚本会尝试无 sudo 回退；若回退也失败，再安装 `python3-venv` 后重新运行。
 - MuJoCo viewer 无法打开：Phase 0 的检查不依赖 viewer；后续先确认 Windows 版本支持 WSLg，并更新 WSL/显卡驱动。
 - 不要使用 `sudo pip install`：它会修改系统 Python，破坏项目隔离。
