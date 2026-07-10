@@ -22,7 +22,8 @@ PANEL_HTML = """<!doctype html>
   <style>
     :root { color-scheme: dark; font-family: system-ui, "Microsoft YaHei", sans-serif; }
     body { margin: 0; background: #111827; color: #e5e7eb; }
-    main { max-width: 780px; margin: auto; padding: 24px; }
+    main { max-width: 980px; margin: auto; padding: 24px; }
+    [hidden] { display: none !important; }
     h1 { margin: 0 0 6px; font-size: 24px; }
     .muted { color: #9ca3af; }
     .card { margin-top: 18px; padding: 18px; background: #1f2937;
@@ -42,6 +43,17 @@ PANEL_HTML = """<!doctype html>
     .watch-value { color: #fbbf24; font-size: 34px; font-variant-numeric: tabular-nums; }
     .description { min-height: 44px; margin-top: 10px; color: #d1d5db; }
     .status { margin-top: 10px; color: #86efac; min-height: 22px; }
+    .insight { line-height: 1.7; padding: 12px; background: #111827;
+               border-left: 4px solid #f59e0b; border-radius: 6px; }
+    .chart-block { margin-top: 16px; padding: 12px; background: #111827;
+                   border-radius: 8px; }
+    .chart-title { display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+                   margin-bottom: 8px; font-weight: 650; }
+    .legend { font-size: 13px; font-weight: 400; color: #d1d5db; }
+    .legend::before { content: ''; display: inline-block; width: 18px;
+                      border-top: 3px solid var(--legend-color); margin-right: 5px;
+                      vertical-align: middle; }
+    canvas { display: block; width: 100%; height: 220px; }
     code { color: #fde68a; }
     @media (max-width: 580px) { .grid { grid-template-columns: 1fr; } }
   </style>
@@ -52,7 +64,7 @@ PANEL_HTML = """<!doctype html>
   <div class="muted">这是 MuJoCo Viewer 的中文辅助面板；只监听本机 127.0.0.1。</div>
   <div id="modeBadge" class="status">正在读取控制模式……</div>
 
-  <section id="torqueControl" class="card">
+  <section id="watchControl" class="card">
     <label for="watchField">Watch Field（观察变量）</label>
     <select id="watchField">
       <option value="qpos">qpos — 关节角度</option>
@@ -85,7 +97,7 @@ PANEL_HTML = """<!doctype html>
     <div id="pdStatus" class="status"></div>
   </section>
 
-  <section class="card">
+  <section id="torqueControl" class="card">
     <label for="torqueInput">joint_motor 精确扭矩输入（N·m）</label>
     <input id="torqueInput" type="number" min="-2" max="2" step="0.01" value="0" />
     <button id="applyTorque" class="primary">应用精确值</button>
@@ -111,6 +123,46 @@ PANEL_HTML = """<!doctype html>
     <button id="reset" class="danger">重置姿态</button>
   </section>
 
+  <section id="pdInsightCard" class="card" hidden>
+    <h2 style="margin-top:0">为什么没有完全到达目标？</h2>
+    <div id="equilibriumExplanation" class="insight">正在计算重力与 PD 平衡……</div>
+    <div class="grid" style="margin-top:12px">
+      <div class="metric">目标姿态保持力矩<strong id="targetHoldTorque">--</strong></div>
+      <div class="metric">当前位置偏置/重力矩<strong id="biasTorque">--</strong></div>
+      <div class="metric">P 项：Kp × 位置误差<strong id="pTorque">--</strong></div>
+      <div class="metric">D 项：Kd × 速度误差<strong id="dTorque">--</strong></div>
+    </div>
+  </section>
+
+  <section id="responseCard" class="card" hidden>
+    <h2 style="margin:0">实时响应曲线</h2>
+    <div class="muted">记录最近 30 秒。修改目标时，绿色虚线会形成阶跃，可直接观察实际角度如何追踪。</div>
+    <button id="toggleRecording">暂停记录</button>
+    <button id="clearCharts">清空曲线</button>
+
+    <div class="chart-block">
+      <div class="chart-title">角度响应
+        <span class="legend" style="--legend-color:#34d399">目标角度</span>
+        <span class="legend" style="--legend-color:#60a5fa">实际角度</span>
+      </div>
+      <canvas id="angleChart"></canvas>
+    </div>
+    <div class="chart-block">
+      <div class="chart-title">角速度
+        <span class="legend" style="--legend-color:#fbbf24">实际角速度</span>
+      </div>
+      <canvas id="velocityChart"></canvas>
+    </div>
+    <div class="chart-block">
+      <div class="chart-title">控制力矩
+        <span class="legend" style="--legend-color:#9ca3af">限幅前 raw PD</span>
+        <span class="legend" style="--legend-color:#f97316">实际 applied</span>
+        <span class="legend" style="--legend-color:#ef4444">±2 N·m 限幅</span>
+      </div>
+      <canvas id="torqueChart"></canvas>
+    </div>
+  </section>
+
   <section class="card muted">
     <strong style="color:#e5e7eb">最重要的关系</strong><br/>
     <code id="controlRelation">ctrl（输入扭矩） → MuJoCo 动力学 → qpos/qvel（角度与速度）</code><br/>
@@ -125,6 +177,9 @@ const definitions = {
   actuator_force: {unit: 'N·m', text: 'MuJoCo 执行器当前实际输出；本模型 gear=1，通常接近 ctrl。'}
 };
 let latest = null;
+let responseHistory = [];
+let recording = true;
+let lastRecordedTime = null;
 const $ = (id) => document.getElementById(id);
 
 function format(value, digits=6) { return Number(value).toFixed(digits); }
@@ -145,6 +200,8 @@ function renderState(state) {
   $('pdControl').hidden = !pdMode;
   $('errorMetric').hidden = !pdMode;
   $('rawTorqueMetric').hidden = !pdMode;
+  $('pdInsightCard').hidden = !pdMode;
+  $('responseCard').hidden = !pdMode;
   $('time').textContent = `${format(state.time, 3)} s`;
   $('qpos').textContent = `${format(state.qpos)} rad / ${format(state.qpos_deg, 2)}°`;
   $('qvel').textContent = `${format(state.qvel)} rad/s`;
@@ -152,6 +209,10 @@ function renderState(state) {
   if (pdMode) {
     $('positionError').textContent = `${format(state.position_error_rad)} rad / ${format(state.position_error_deg, 2)}°`;
     $('rawTorque').textContent = `${format(state.raw_torque_nm, 3)} N·m`;
+    $('targetHoldTorque').textContent = `${format(state.target_hold_torque_nm, 3)} N·m`;
+    $('biasTorque').textContent = `${format(state.bias_torque_nm, 3)} N·m`;
+    $('pTorque').textContent = `${format(state.proportional_torque_nm, 3)} N·m`;
+    $('dTorque').textContent = `${format(state.derivative_torque_nm, 3)} N·m`;
     $('pdStatus').textContent = state.saturated
       ? '当前已触及 ±2 N·m 力矩限幅（橙色杆不会得到更大的力矩）'
       : '当前力矩未触及限幅';
@@ -160,11 +221,134 @@ function renderState(state) {
     if (document.activeElement !== $('kdInput')) $('kdInput').value = format(state.kd, 2);
     $('controlRelation').textContent = '目标角度 − qpos → PD 控制器 → ctrl → MuJoCo → 新的 qpos/qvel';
     definitions.ctrl.text = 'PD 控制器根据角度/速度误差实时算出的电机扭矩；原生 Viewer 紫色滑块会被控制器持续更新。';
+    const withinLimit = Math.abs(state.target_hold_torque_nm) <= 2;
+    $('equilibriumExplanation').textContent =
+      `目标 ${format(state.target_position_deg, 1)}° 需要约 ${format(state.target_hold_torque_nm, 3)} N·m ` +
+      `才能抵抗重力（${withinLimit ? '在电机能力内' : '已超出电机能力'}）。` +
+      `但纯 PD 在完全到达目标时误差和速度都为 0，因此 P、D 输出也会变成 0。` +
+      `当前保留 ${format(state.position_error_deg, 2)}° 误差，P 项 ${format(state.proportional_torque_nm, 3)} N·m ` +
+      `与当前位置所需的 ${format(state.bias_torque_nm, 3)} N·m 基本平衡，所以会停在这里。`;
+    appendResponsePoint(state);
   } else {
     if (document.activeElement !== $('torqueInput')) $('torqueInput').value = format(state.ctrl, 3);
     if (document.activeElement !== $('torqueSlider')) $('torqueSlider').value = state.ctrl;
   }
   renderWatch();
+}
+
+function clearResponseHistory() {
+  responseHistory = [];
+  lastRecordedTime = null;
+  drawAllCharts();
+}
+
+function appendResponsePoint(state) {
+  if (!recording) return;
+  if (lastRecordedTime !== null && state.time < lastRecordedTime) clearResponseHistory();
+  if (lastRecordedTime !== null && Math.abs(state.time - lastRecordedTime) < 1e-6) return;
+  lastRecordedTime = state.time;
+  responseHistory.push({
+    time: state.time,
+    target: state.target_position_deg,
+    position: state.qpos_deg,
+    velocity: state.qvel * 180 / Math.PI,
+    rawTorque: state.raw_torque_nm,
+    torque: state.ctrl
+  });
+  const cutoff = state.time - 30;
+  while (responseHistory.length > 2 && responseHistory[0].time < cutoff) responseHistory.shift();
+  drawAllCharts();
+}
+
+function drawChart(canvas, series, options={}) {
+  const width = Math.max(canvas.clientWidth, 320);
+  const height = 220;
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  const context = canvas.getContext('2d');
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, width, height);
+
+  const margin = {left: 58, right: 14, top: 12, bottom: 30};
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  context.fillStyle = '#9ca3af';
+  context.font = '12px system-ui, sans-serif';
+  if (responseHistory.length < 2) {
+    context.fillText('等待至少两个实时采样点……', margin.left, margin.top + 24);
+    return;
+  }
+
+  const xMin = responseHistory[0].time;
+  const xMax = Math.max(responseHistory[responseHistory.length - 1].time, xMin + 0.1);
+  const values = [];
+  for (const point of responseHistory) {
+    for (const item of series) values.push(item.value(point));
+  }
+  if (options.extraValues) values.push(...options.extraValues);
+  if (options.includeZero) values.push(0);
+  let yMin = Math.min(...values);
+  let yMax = Math.max(...values);
+  const padding = Math.max((yMax - yMin) * 0.12, options.minimumPadding || 0.5);
+  yMin -= padding;
+  yMax += padding;
+  const toX = (value) => margin.left + (value - xMin) / (xMax - xMin) * plotWidth;
+  const toY = (value) => margin.top + (yMax - value) / (yMax - yMin) * plotHeight;
+
+  context.strokeStyle = '#374151';
+  context.lineWidth = 1;
+  context.fillStyle = '#9ca3af';
+  for (let index = 0; index <= 4; index += 1) {
+    const fraction = index / 4;
+    const y = margin.top + fraction * plotHeight;
+    const value = yMax - fraction * (yMax - yMin);
+    context.beginPath(); context.moveTo(margin.left, y); context.lineTo(width - margin.right, y); context.stroke();
+    context.fillText(value.toFixed(options.decimals ?? 1), 5, y + 4);
+    const x = margin.left + fraction * plotWidth;
+    const time = xMin + fraction * (xMax - xMin);
+    context.beginPath(); context.moveTo(x, margin.top); context.lineTo(x, margin.top + plotHeight); context.stroke();
+    context.fillText(time.toFixed(1), x - 12, height - 8);
+  }
+  context.fillText(options.unit || '', 5, 12);
+
+  if (options.horizontalLines) {
+    for (const line of options.horizontalLines) {
+      context.strokeStyle = line.color;
+      context.setLineDash(line.dash || [6, 4]);
+      context.beginPath(); context.moveTo(margin.left, toY(line.value)); context.lineTo(width - margin.right, toY(line.value)); context.stroke();
+    }
+  }
+  for (const item of series) {
+    context.strokeStyle = item.color;
+    context.lineWidth = item.width || 2;
+    context.setLineDash(item.dash || []);
+    context.beginPath();
+    responseHistory.forEach((point, index) => {
+      const x = toX(point.time);
+      const y = toY(item.value(point));
+      if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
+    });
+    context.stroke();
+  }
+  context.setLineDash([]);
+}
+
+function drawAllCharts() {
+  drawChart($('angleChart'), [
+    {value: point => point.target, color: '#34d399', dash: [7, 5], width: 2},
+    {value: point => point.position, color: '#60a5fa', width: 3}
+  ], {unit: 'deg', includeZero: true, minimumPadding: 2});
+  drawChart($('velocityChart'), [
+    {value: point => point.velocity, color: '#fbbf24', width: 2}
+  ], {unit: 'deg/s', includeZero: true, minimumPadding: 2});
+  drawChart($('torqueChart'), [
+    {value: point => point.rawTorque, color: '#9ca3af', dash: [4, 4], width: 2},
+    {value: point => point.torque, color: '#f97316', width: 3}
+  ], {
+    unit: 'N·m', includeZero: true, extraValues: [-2, 2], minimumPadding: 0.2,
+    horizontalLines: [{value: 2, color: '#ef4444'}, {value: -2, color: '#ef4444'}]
+  });
 }
 async function refresh() {
   try {
@@ -205,7 +389,19 @@ $('torqueSlider').addEventListener('change', (event) => setTorque(event.target.v
 document.querySelectorAll('[data-torque]').forEach((button) => button.addEventListener('click', () => setTorque(button.dataset.torque)));
 $('applyPd').addEventListener('click', setPd);
 [$('targetInput'), $('kpInput'), $('kdInput')].forEach((input) => input.addEventListener('keydown', (event) => { if (event.key === 'Enter') setPd(); }));
-$('reset').addEventListener('click', async () => { await post('/api/reset'); $('status').textContent = '已重置'; await refresh(); });
+$('toggleRecording').addEventListener('click', () => {
+  recording = !recording;
+  $('toggleRecording').textContent = recording ? '暂停记录' : '继续记录';
+});
+$('clearCharts').addEventListener('click', clearResponseHistory);
+$('reset').addEventListener('click', async () => {
+  await post('/api/reset');
+  clearResponseHistory();
+  $('status').textContent = '已重置';
+  $('pdStatus').textContent = '已重置姿态，PD 控制继续生效';
+  await refresh();
+});
+window.addEventListener('resize', drawAllCharts);
 refresh();
 setInterval(refresh, 120);
 </script>
@@ -231,6 +427,7 @@ class LearningPanelServer:
         self.joint_id = joint_id
         self.actuator_id = actuator_id
         self.pd_controller = pd_controller
+        self._analysis_data = mujoco.MjData(model)
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer(
             ("127.0.0.1", port), self._make_handler_type()
@@ -282,6 +479,14 @@ class LearningPanelServer:
             )
             settings = self.pd_controller.settings()
             target_rad = settings["target_position_rad"]
+            with self._lock:
+                current_bias_torque = float(self.data.qfrc_bias[qvel_address])
+                mujoco.mj_resetData(self.model, self._analysis_data)
+                self._analysis_data.qpos[qpos_address] = target_rad
+                mujoco.mj_forward(self.model, self._analysis_data)
+                target_hold_torque = float(
+                    self._analysis_data.qfrc_bias[qvel_address]
+                )
             snapshot.update(
                 {
                     "kp": settings["kp"],
@@ -293,6 +498,10 @@ class LearningPanelServer:
                     * 180.0
                     / 3.141592653589793,
                     "raw_torque_nm": output.raw_torque_nm,
+                    "proportional_torque_nm": output.proportional_torque_nm,
+                    "derivative_torque_nm": output.derivative_torque_nm,
+                    "target_hold_torque_nm": target_hold_torque,
+                    "bias_torque_nm": current_bias_torque,
                     "saturated": output.saturated,
                 }
             )

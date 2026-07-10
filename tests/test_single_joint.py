@@ -28,6 +28,15 @@ def test_single_joint_model_moves_under_positive_torque() -> None:
     assert actuator_id >= 0
     assert model.jnt_type[joint_id] == mujoco.mjtJoint.mjJNT_HINGE
 
+    # The base and motor housing are visual teaching aids around the hinge.
+    # Letting the link collide with them injects non-physical velocity spikes.
+    for geom_name in ("base_geom", "motor_housing"):
+        geom_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_GEOM, geom_name
+        )
+        assert model.geom_contype[geom_id] == 0
+        assert model.geom_conaffinity[geom_id] == 0
+
     data.ctrl[actuator_id] = 0.5
     for _ in range(100):
         mujoco.mj_step(model, data)

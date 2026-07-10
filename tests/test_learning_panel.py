@@ -98,6 +98,12 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert "PD 闭环参数" in html
         assert "目标角度" in html
         assert "比例增益 Kp" in html
+        assert "实时响应曲线" in html
+        assert 'id="angleChart"' in html
+        assert "为什么没有完全到达目标" in html
+        assert "[hidden] { display: none !important; }" in html
+        assert '<section id="watchControl"' in html
+        assert '<section id="torqueControl"' in html
 
         result = post_json(
             panel.url + "api/pd",
@@ -113,6 +119,14 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert state["target_position_deg"] == pytest.approx(25.0)
         assert state["kp"] == pytest.approx(24.0)
         assert state["kd"] == pytest.approx(2.5)
+        assert state["target_hold_torque_nm"] == pytest.approx(
+            1.0 * 9.81 * 0.25 * 0.4226182617, rel=1e-5
+        )
+        assert state["proportional_torque_nm"] == pytest.approx(
+            24.0 * state["position_error_rad"]
+        )
+        assert "derivative_torque_nm" in state
+        assert "bias_torque_nm" in state
 
         with pytest.raises(urllib.error.HTTPError) as error:
             post_json(panel.url + "api/torque", {"value": 1.0})
