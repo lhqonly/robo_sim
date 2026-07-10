@@ -10,12 +10,17 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import shutil
+import socket
 import subprocess
 import sys
+import time
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 import mujoco
+from robo_sim.ui.learning_panel import LearningPanelServer
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -100,7 +105,7 @@ def print_viewer_explanation(torque_nm: float) -> None:
     print("You can also focus this terminal and press Ctrl+C.\n", flush=True)
 
 
-def run_managed_viewer_worker(torque_nm: float) -> Sample:
+def run_managed_viewer_worker(torque_nm: float, control_port: int) -> Sample:
     """Run MuJoCo's managed GUI inside the isolated worker process."""
     model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
     data = mujoco.MjData(model)
@@ -115,12 +120,19 @@ def run_managed_viewer_worker(torque_nm: float) -> Sample:
         )
 
     data.ctrl[actuator_id] = torque_nm
+    panel = LearningPanelServer(
+        model, data, joint_id, actuator_id, port=control_port
+    )
+    panel.start()
 
     # Managed mode owns the GUI/physics lifecycle and is more stable on WSLg
     # than creating and automatically destroying a passive viewer after N seconds.
     from mujoco import viewer as mujoco_viewer
 
-    mujoco_viewer.launch(model, data)
+    try:
+        mujoco_viewer.launch(model, data)
+    finally:
+        panel.close()
     print("Viewer window closed.")
 
     return Sample(
@@ -131,12 +143,49 @@ def run_managed_viewer_worker(torque_nm: float) -> Sample:
     )
 
 
-def run_viewer_subprocess(torque_nm: float) -> int:
+def find_available_port() -> int:
+    """Reserve an ephemeral localhost port for the learning panel."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def wait_for_panel(url: str, timeout_s: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url + "api/state", timeout=0.2):
+                return True
+        except OSError:
+            time.sleep(0.1)
+    return False
+
+
+def open_panel_in_browser(url: str) -> bool:
+    """Open the localhost panel in the Windows browser when running in WSL."""
+    explorer = shutil.which("explorer.exe")
+    if explorer is None:
+        return False
+    try:
+        subprocess.Popen(
+            [explorer, url],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return True
+    except OSError:
+        return False
+
+
+def run_viewer_subprocess(torque_nm: float, open_browser: bool = True) -> int:
     """Keep terminal signal handling outside the native GUI process."""
     if not -2.0 <= torque_nm <= 2.0:
         raise ValueError("torque must be within [-2, 2] N·m")
 
     print_viewer_explanation(torque_nm)
+    control_port = find_available_port()
+    panel_url = f"http://127.0.0.1:{control_port}/"
     environment = os.environ.copy()
     environment[VIEWER_WORKER_ENV] = "1"
     process = subprocess.Popen(
@@ -146,6 +195,8 @@ def run_viewer_subprocess(torque_nm: float) -> int:
             "--view",
             "--torque",
             str(torque_nm),
+            "--control-port",
+            str(control_port),
         ],
         cwd=PROJECT_ROOT,
         env=environment,
@@ -154,6 +205,16 @@ def run_viewer_subprocess(torque_nm: float) -> int:
     )
 
     try:
+        if wait_for_panel(panel_url):
+            print(f"Chinese learning panel: {panel_url}", flush=True)
+            if open_browser and not open_panel_in_browser(panel_url):
+                print(
+                    "Could not open the browser automatically; open the URL above."
+                )
+        else:
+            print(
+                "Learning panel did not become ready; the 3D Viewer may still work."
+            )
         return_code = process.wait()
     except KeyboardInterrupt:
         print("\nCtrl+C received; closing the Viewer...", flush=True)
@@ -203,6 +264,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="open the interactive Viewer until it is closed (requires WSLg/display)",
     )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="do not open the Chinese learning panel in the browser automatically",
+    )
+    parser.add_argument("--control-port", type=int, default=0, help=argparse.SUPPRESS)
     return parser
 
 
@@ -212,7 +279,7 @@ def main() -> int:
 
     if args.view and os.environ.get(VIEWER_WORKER_ENV) == "1":
         try:
-            final = run_managed_viewer_worker(args.torque)
+            final = run_managed_viewer_worker(args.torque, args.control_port)
         except ValueError as exc:
             parser.error(str(exc))
         print(
@@ -228,7 +295,9 @@ def main() -> int:
 
     if args.view:
         try:
-            return run_viewer_subprocess(args.torque)
+            return run_viewer_subprocess(
+                args.torque, open_browser=not args.no_browser
+            )
         except ValueError as exc:
             parser.error(str(exc))
 
