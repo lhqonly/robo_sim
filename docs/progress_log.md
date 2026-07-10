@@ -9,13 +9,13 @@
 ### 实现
 
 - `models/single_joint/single_joint.xml`：固定基座、1 DoF hinge、0.5 m / 1 kg 杆件和 `[-2, 2] N·m` motor。
-- `experiments/001_single_joint_pd/run.py`：无窗口恒力矩实验，支持设置力矩、时长和打印采样数。
+- `experiments/001_single_joint_pd/run.py`：恒力矩实验，支持设置力矩、时长和打印采样数；默认无窗口快速运行，`--view` 在 WSLg 中实时演示动作。
 - `tests/test_single_joint.py`：验证模型结构、正力矩产生正向运动，以及 CLI 可独立运行并输出状态列。
 - `docs/concepts.md`：补充模型映射、`qpos/qvel/ctrl` 和开环力矩。
 
 ### 验证结果
 
-默认实验施加 `0.5 N·m`、运行 1 s：关节从 `0 rad` 运动到约 `0.143473 rad`，最终速度约 `0.078950 rad/s`。Phase 1 新增测试为 `2 passed`，项目完整测试为 `4 passed`；零力矩保持静止，负力矩产生方向相反的运动。
+默认实验施加 `0.5 N·m`、运行 1 s：关节从 `0 rad` 运动到约 `0.143473 rad`，最终速度约 `0.078950 rad/s`。Phase 1 新增测试为 `2 passed`，项目完整测试为 `4 passed`；零力矩保持静止，负力矩产生方向相反的运动。当前环境检测到 `DISPLAY=:0`、Wayland 与 `/mnt/wslg`；已实际启动 `--view` 运行 2 s，MuJoCo Viewer 正常显示并实时推进模型。
 
 ### 下一步
 

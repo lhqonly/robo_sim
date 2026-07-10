@@ -8,6 +8,7 @@ measured angle or velocity. Phase 2 will replace it with feedback (PD control).
 from __future__ import annotations
 
 import argparse
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,9 +30,9 @@ class Sample:
 
 
 def simulate_constant_torque(
-    torque_nm: float, duration_s: float, sample_count: int
+    torque_nm: float, duration_s: float, sample_count: int, view: bool = False
 ) -> list[Sample]:
-    """Run the headless MuJoCo experiment and return evenly spaced samples."""
+    """Run the MuJoCo experiment and return evenly spaced samples."""
     if duration_s <= 0:
         raise ValueError("duration must be greater than zero")
     if sample_count < 2:
@@ -68,13 +69,38 @@ def simulate_constant_torque(
         )
 
     data.ctrl[actuator_id] = torque_nm
-    samples = [observe()]
-    for step in range(1, step_count + 1):
-        mujoco.mj_step(model, data)
-        if step in sample_steps:
-            samples.append(observe())
+    def run_steps(active_viewer: object | None = None) -> list[Sample]:
+        samples = [observe()]
+        for step in range(1, step_count + 1):
+            if active_viewer is not None and not active_viewer.is_running():
+                break
 
-    return samples
+            wall_step_start = time.perf_counter()
+            mujoco.mj_step(model, data)
+
+            if active_viewer is not None:
+                active_viewer.sync()
+                remaining = model.opt.timestep - (time.perf_counter() - wall_step_start)
+                if remaining > 0:
+                    time.sleep(remaining)
+
+            if step in sample_steps:
+                samples.append(observe())
+        return samples
+
+    if view:
+        # Import lazily so headless runs and automated tests do not require a display.
+        from mujoco import viewer as mujoco_viewer
+
+        with mujoco_viewer.launch_passive(model, data) as active_viewer:
+            active_viewer.cam.lookat[:] = (0.0, 0.0, 0.35)
+            active_viewer.cam.distance = 1.5
+            active_viewer.cam.azimuth = 90
+            active_viewer.cam.elevation = -15
+            active_viewer.sync()
+            return run_steps(active_viewer)
+
+    return run_steps()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -99,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=6,
         help="number of states to print, including initial/final (default: 6)",
     )
+    parser.add_argument(
+        "--view",
+        action="store_true",
+        help="open the MuJoCo Viewer and run in real time (requires WSLg/display)",
+    )
     return parser
 
 
@@ -107,7 +138,9 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        samples = simulate_constant_torque(args.torque, args.duration, args.samples)
+        samples = simulate_constant_torque(
+            args.torque, args.duration, args.samples, view=args.view
+        )
     except ValueError as exc:
         parser.error(str(exc))
 

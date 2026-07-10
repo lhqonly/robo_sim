@@ -37,6 +37,13 @@ python experiments/001_single_joint_pd/run.py \
   --torque 0.5 --duration 1.0 --samples 6
 ```
 
+在 WSLg 中打开 MuJoCo Viewer，实时观察杆件运动：
+
+```bash
+python experiments/001_single_joint_pd/run.py \
+  --view --torque 1.0 --duration 5
+```
+
 ## 目录导览
 
 ```text

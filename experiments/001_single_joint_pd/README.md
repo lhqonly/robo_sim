@@ -23,11 +23,21 @@ python experiments/001_single_joint_pd/run.py \
   --torque 0.5 --duration 1.0 --samples 6
 ```
 
+当前 WSL 支持 WSLg 时，可打开 MuJoCo Viewer 实时观察：
+
+```bash
+python experiments/001_single_joint_pd/run.py \
+  --view --torque 1.0 --duration 5
+```
+
+Viewer 中蓝色方块是固定基座，橙色杆是运动连杆。拖动鼠标可以旋转视角，滚轮可以缩放；窗口会在仿真时长结束后关闭。
+
 参数：
 
 - `--torque`：恒定电机力矩，单位 N·m，允许范围 `[-2, 2]`。
 - `--duration`：仿真时间，单位 s，必须大于 0。
 - `--samples`：打印多少个等间隔状态，至少为 2。
+- `--view`：打开 GUI 并按真实时间速度运行；不加时采用无窗口快速运行。
 
 ## 如何读结果
 
@@ -49,4 +59,4 @@ python experiments/001_single_joint_pd/run.py --torque -0.5
 python -m pytest tests/test_single_joint.py
 ```
 
-本阶段不打开 viewer，也不绘图。先确认数值状态和物理方向正确，Phase 2 再加入 PD 控制与响应曲线。
+自动化测试使用无窗口模式，保证可重复并适合 CI；人工验收再使用 `--view` 观察动作。Phase 2 将加入 PD 控制与响应曲线。
