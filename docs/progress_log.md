@@ -18,7 +18,7 @@
 
 - 当前系统 Python 为 3.12.3，满足项目的 Python 3.10+ 要求。
 - Git 已安装。
-- GitHub CLI (`gh`) 尚未安装，因此 Phase 0 先完成本地提交，不自动创建或关联 GitHub 远端。
+- GitHub CLI (`gh`) 尚未安装；远端仓库已由用户创建，并已通过标准 Git 命令关联为 `origin`：`https://github.com/lhqonly/robo_sim.git`。
 
 ### 验证
 

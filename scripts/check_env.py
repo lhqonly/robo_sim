@@ -4,12 +4,22 @@
 from __future__ import annotations
 
 import importlib
+import os
 import platform
 import sys
 from importlib import metadata
+from pathlib import Path
 
 
 REQUIRED_MODULES = ("mujoco", "numpy", "matplotlib", "scipy", "pytest", "jupyter")
+
+
+def configure_local_caches() -> None:
+    """Keep generated caches inside the project instead of relying on $HOME."""
+    project_root = Path(__file__).resolve().parent.parent
+    matplotlib_cache = project_root / ".cache" / "matplotlib"
+    matplotlib_cache.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_cache))
 
 
 def package_version(module_name: str) -> str:
@@ -43,6 +53,7 @@ def check_mujoco_model() -> tuple[int, int]:
 
 
 def main() -> int:
+    configure_local_caches()
     print("LinkJoin Robo SIM — Phase 0 environment check")
     print(f"Python: {platform.python_version()} ({sys.executable})")
     print(f"Platform: {platform.platform()}")
