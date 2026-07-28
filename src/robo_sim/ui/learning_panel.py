@@ -10,6 +10,7 @@ from typing import Any
 
 import mujoco
 
+from robo_sim.analysis.step_response import StepResponseAnalyzer
 from robo_sim.controllers.gravity import GravityCompensationSwitch
 from robo_sim.controllers.pd import PDController
 
@@ -125,7 +126,7 @@ PANEL_HTML = """<!doctype html>
       <div id="pdTorqueMetric" class="metric" hidden>PD 力矩（P + D）<strong id="pdTorque">--</strong></div>
       <div id="gravityTorqueMetric" class="metric" hidden>重力补偿力矩<strong id="gravityTorque">--</strong></div>
     </div>
-    <button id="reset" class="danger">重置姿态</button>
+    <button id="reset" class="danger">重新实验：回到 0° 并计时</button>
   </section>
 
   <section id="pdInsightCard" class="card" hidden>
@@ -140,6 +141,43 @@ PANEL_HTML = """<!doctype html>
     </div>
   </section>
 
+  <section id="responseMetricsCard" class="card" hidden>
+    <h2 style="margin-top:0">响应时间测量</h2>
+    <div class="insight">
+      从应用新目标开始计时。角度进入允许误差范围，并连续保持指定时间，才算真正稳定；
+      中途跑出范围就重新计算稳定时间。
+    </div>
+    <div class="grid" style="margin-top:12px">
+      <div>
+        <label for="settlingToleranceInput">允许角度误差（± degree / °）</label>
+        <input id="settlingToleranceInput" type="number" min="0.01" max="30" step="0.1" />
+      </div>
+      <div>
+        <label for="settlingHoldInput">需要连续保持（秒）</label>
+        <input id="settlingHoldInput" type="number" min="0.02" max="10" step="0.1" />
+      </div>
+    </div>
+    <button id="applyResponseCriteria">应用判定标准</button>
+    <div id="responseStatus" class="status">正在等待响应实验……</div>
+    <div class="grid" style="margin-top:12px">
+      <div class="metric">本次已经运行<strong id="responseElapsed">--</strong></div>
+      <div class="metric">首次进入允许误差<strong id="firstArrivalTime">--</strong></div>
+      <div class="metric">上升时间（10% → 90%）<strong id="riseTime">--</strong></div>
+      <div class="metric">稳定时间 Ts<strong id="settlingTime">--</strong></div>
+      <div class="metric">确认稳定耗时（含持续观察）<strong id="settlingConfirmedTime">--</strong></div>
+      <div class="metric">最大超调<strong id="overshoot">--</strong></div>
+      <div class="metric">当前跟踪误差<strong id="responseCurrentError">--</strong></div>
+    </div>
+    <div class="muted" style="margin-top:10px">
+      调参对比方法：修改 Kp/Kd → 应用 → 点击“重新实验：回到 0° 并计时”。
+      稳定时间越短不一定越好，还要同时观察超调、振荡、最大力矩和真实人体舒适性。
+    </div>
+    <div class="muted">
+      注意：这里测的是仿真时间，不包含真实传感器、滤波、通信、电机驱动和人体反作用延迟，
+      不能直接当作真实外骨骼的安全结论。
+    </div>
+  </section>
+
   <section id="responseCard" class="card" hidden>
     <h2 style="margin:0">实时响应曲线</h2>
     <div class="muted">记录最近 30 秒。修改目标时，绿色虚线会形成阶跃，可直接观察实际角度如何追踪。</div>
@@ -151,6 +189,7 @@ PANEL_HTML = """<!doctype html>
       <div class="chart-title">角度响应
         <span class="legend" style="--legend-color:#34d399">目标角度</span>
         <span class="legend" style="--legend-color:#60a5fa">实际角度</span>
+        <span class="legend" style="--legend-color:#fbbf24">稳定允许范围</span>
       </div>
       <canvas id="angleChart"></canvas>
     </div>
@@ -192,6 +231,9 @@ let lastAdvanceWallTime = Date.now();
 const $ = (id) => document.getElementById(id);
 
 function format(value, digits=6) { return Number(value).toFixed(digits); }
+function formatOptionalTime(value) {
+  return value === null || value === undefined ? '尚未达到' : `${format(value, 3)} s`;
+}
 function renderWatch() {
   if (!latest) return;
   const key = $('watchField').value;
@@ -220,7 +262,11 @@ function renderState(state) {
   $('pdTorqueMetric').hidden = !pdMode;
   $('gravityTorqueMetric').hidden = !pdMode;
   $('pdInsightCard').hidden = !pdMode;
+  $('responseMetricsCard').hidden = !pdMode;
   $('responseCard').hidden = !pdMode;
+  $('reset').textContent = pdMode
+    ? '重新实验：回到 0° 并计时'
+    : '重置姿态';
   $('time').textContent = `${format(state.time, 3)} s`;
   $('qpos').textContent = `${format(state.qpos)} rad / ${format(state.qpos_deg, 2)}°`;
   $('qvel').textContent = `${format(state.qvel)} rad/s`;
@@ -245,6 +291,37 @@ function renderState(state) {
     if (document.activeElement !== $('targetInput')) $('targetInput').value = format(state.target_position_deg, 2);
     if (document.activeElement !== $('kpInput')) $('kpInput').value = format(state.kp, 2);
     if (document.activeElement !== $('kdInput')) $('kdInput').value = format(state.kd, 2);
+    const response = state.step_response;
+    if (document.activeElement !== $('settlingToleranceInput')) {
+      $('settlingToleranceInput').value = format(response.tolerance_deg, 2);
+    }
+    if (document.activeElement !== $('settlingHoldInput')) {
+      $('settlingHoldInput').value = format(response.hold_time_s, 2);
+    }
+    $('responseElapsed').textContent = `${format(response.elapsed_time_s, 3)} s`;
+    $('firstArrivalTime').textContent = formatOptionalTime(response.first_arrival_time_s);
+    $('riseTime').textContent = formatOptionalTime(response.rise_time_s);
+    $('settlingTime').textContent = formatOptionalTime(response.settling_time_s);
+    $('settlingConfirmedTime').textContent = formatOptionalTime(response.settling_confirmed_time_s);
+    $('overshoot').textContent =
+      `${format(response.overshoot_deg, 2)}° / ${format(response.overshoot_percent, 1)}%`;
+    $('responseCurrentError').textContent = `${format(response.current_error_deg, 2)}°`;
+    if (response.status === 'settled') {
+      $('responseStatus').textContent =
+        `已确认稳定：误差保持在 ±${format(response.tolerance_deg, 2)}° 内至少 ` +
+        `${format(response.hold_time_s, 2)} s。稳定时间 Ts=${format(response.settling_time_s, 3)} s。`;
+    } else if (response.status === 'stabilizing') {
+      $('responseStatus').textContent =
+        `已经进入 ±${format(response.tolerance_deg, 2)}°，目前连续保持 ` +
+        `${format(response.stable_for_s, 3)} / ${format(response.hold_time_s, 3)} s；暂未宣布稳定。`;
+    } else if (response.status === 'no_step') {
+      $('responseStatus').textContent =
+        '本次起点和目标相同，没有形成角度阶跃。请点击“重新实验”或设置一个新目标。';
+    } else {
+      $('responseStatus').textContent =
+        `正在追踪目标：已运行 ${format(response.elapsed_time_s, 3)} s，` +
+        `当前还差 ${format(Math.abs(response.current_error_deg), 2)}°。`;
+    }
     $('controlRelation').textContent = state.gravity_compensation_enabled
       ? '重力补偿先托住重量 + PD 修正误差 → ctrl → MuJoCo → 新的 qpos/qvel'
       : '目标角度 − qpos → PD 控制器 → ctrl → MuJoCo → 新的 qpos/qvel';
@@ -299,6 +376,7 @@ function appendResponsePoint(state) {
   responseHistory.push({
     time: state.time,
     target: state.target_position_deg,
+    tolerance: state.step_response.tolerance_deg,
     position: state.qpos_deg,
     velocity: state.qvel * 180 / Math.PI,
     pdTorque: state.pd_torque_nm,
@@ -387,6 +465,8 @@ function drawChart(canvas, series, options={}) {
 function drawAllCharts() {
   drawChart($('angleChart'), [
     {value: point => point.target, color: '#34d399', dash: [7, 5], width: 2},
+    {value: point => point.target + point.tolerance, color: '#fbbf24', dash: [3, 5], width: 1},
+    {value: point => point.target - point.tolerance, color: '#fbbf24', dash: [3, 5], width: 1},
     {value: point => point.position, color: '#60a5fa', width: 3}
   ], {unit: 'deg', includeZero: true, minimumPadding: 2});
   drawChart($('velocityChart'), [
@@ -444,6 +524,17 @@ async function toggleGravityCompensation() {
     await refresh();
   } catch (error) { $('pdStatus').textContent = error.message; }
 }
+async function setResponseCriteria() {
+  try {
+    const result = await post('/api/response-criteria', {
+      tolerance_deg: Number($('settlingToleranceInput').value),
+      hold_time_s: Number($('settlingHoldInput').value)
+    });
+    $('responseStatus').textContent =
+      `已应用：误差 ±${format(result.tolerance_deg, 2)}°，连续保持 ${format(result.hold_time_s, 2)} s。`;
+    await refresh();
+  } catch (error) { $('responseStatus').textContent = error.message; }
+}
 $('watchField').addEventListener('change', renderWatch);
 $('applyTorque').addEventListener('click', () => setTorque($('torqueInput').value));
 $('torqueInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') setTorque(event.target.value); });
@@ -451,7 +542,9 @@ $('torqueSlider').addEventListener('change', (event) => setTorque(event.target.v
 document.querySelectorAll('[data-torque]').forEach((button) => button.addEventListener('click', () => setTorque(button.dataset.torque)));
 $('applyPd').addEventListener('click', setPd);
 $('toggleGravityCompensation').addEventListener('click', toggleGravityCompensation);
+$('applyResponseCriteria').addEventListener('click', setResponseCriteria);
 [$('targetInput'), $('kpInput'), $('kdInput')].forEach((input) => input.addEventListener('keydown', (event) => { if (event.key === 'Enter') setPd(); }));
+[$('settlingToleranceInput'), $('settlingHoldInput')].forEach((input) => input.addEventListener('keydown', (event) => { if (event.key === 'Enter') setResponseCriteria(); }));
 $('toggleRecording').addEventListener('click', () => {
   recording = !recording;
   $('toggleRecording').textContent = recording ? '暂停记录' : '继续记录';
@@ -462,7 +555,7 @@ $('reset').addEventListener('click', async () => {
   await post('/api/reset');
   clearResponseHistory();
   $('status').textContent = '已重置';
-  $('pdStatus').textContent = '已重置姿态，PD 控制继续生效';
+  $('pdStatus').textContent = '已回到 0° 并开始新的响应计时，PD 控制继续生效';
   await refresh();
 });
 window.addEventListener('resize', drawAllCharts);
@@ -486,6 +579,7 @@ class LearningPanelServer:
         port: int = 0,
         pd_controller: PDController | None = None,
         gravity_compensation: GravityCompensationSwitch | None = None,
+        step_response_analyzer: StepResponseAnalyzer | None = None,
     ) -> None:
         self.model = model
         self.data = data
@@ -495,6 +589,20 @@ class LearningPanelServer:
         self.gravity_compensation = gravity_compensation
         if self.pd_controller is not None and self.gravity_compensation is None:
             self.gravity_compensation = GravityCompensationSwitch(enabled=False)
+        self._step_response_driven_externally = step_response_analyzer is not None
+        self.step_response_analyzer = step_response_analyzer
+        if self.pd_controller is not None and self.step_response_analyzer is None:
+            self.step_response_analyzer = StepResponseAnalyzer(
+                tolerance_rad=3.141592653589793 / 180.0,
+                hold_time_s=0.5,
+            )
+            qpos_address = self.model.jnt_qposadr[self.joint_id]
+            settings = self.pd_controller.settings()
+            self.step_response_analyzer.start(
+                time_s=float(self.data.time),
+                position_rad=float(self.data.qpos[qpos_address]),
+                target_position_rad=settings["target_position_rad"],
+            )
         self._analysis_data = mujoco.MjData(model)
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer(
@@ -524,12 +632,12 @@ class LearningPanelServer:
             self._thread.join(timeout=2)
             self._thread = None
 
-    def snapshot(self) -> dict[str, float | str | bool]:
+    def snapshot(self) -> dict[str, Any]:
         qpos_address = self.model.jnt_qposadr[self.joint_id]
         qvel_address = self.model.jnt_dofadr[self.joint_id]
         with self._lock:
             qpos = float(self.data.qpos[qpos_address])
-            snapshot: dict[str, float | str | bool] = {
+            snapshot: dict[str, Any] = {
                 "time": float(self.data.time),
                 "qpos": qpos,
                 "qpos_deg": qpos * 180.0 / 3.141592653589793,
@@ -553,6 +661,42 @@ class LearningPanelServer:
             )
             settings = self.pd_controller.settings()
             target_rad = settings["target_position_rad"]
+            if not self._step_response_driven_externally:
+                self.step_response_analyzer.observe(
+                    time_s=float(snapshot["time"]),
+                    position_rad=float(snapshot["qpos"]),
+                )
+            step_response = self.step_response_analyzer.snapshot()
+            step_response.update(
+                {
+                    "initial_position_deg": float(
+                        step_response["initial_position_rad"]
+                    )
+                    * 180.0
+                    / 3.141592653589793,
+                    "target_position_deg": float(
+                        step_response["target_position_rad"]
+                    )
+                    * 180.0
+                    / 3.141592653589793,
+                    "step_amplitude_deg": float(
+                        step_response["step_amplitude_rad"]
+                    )
+                    * 180.0
+                    / 3.141592653589793,
+                    "tolerance_deg": float(step_response["tolerance_rad"])
+                    * 180.0
+                    / 3.141592653589793,
+                    "overshoot_deg": float(step_response["overshoot_rad"])
+                    * 180.0
+                    / 3.141592653589793,
+                    "current_error_deg": float(
+                        step_response["current_error_rad"]
+                    )
+                    * 180.0
+                    / 3.141592653589793,
+                }
+            )
             with self._lock:
                 mujoco.mj_resetData(self.model, self._analysis_data)
                 self._analysis_data.qpos[qpos_address] = target_rad
@@ -583,6 +727,7 @@ class LearningPanelServer:
                     "target_hold_torque_nm": target_hold_torque,
                     "bias_torque_nm": current_bias_torque,
                     "saturated": output.saturated,
+                    "step_response": step_response,
                 }
             )
         return snapshot
@@ -616,6 +761,15 @@ class LearningPanelServer:
         self.pd_controller.update(
             kp=kp, kd=kd, target_position_rad=target_rad
         )
+        qpos_address = self.model.jnt_qposadr[self.joint_id]
+        with self._lock:
+            time_s = float(self.data.time)
+            position_rad = float(self.data.qpos[qpos_address])
+        self.step_response_analyzer.start(
+            time_s=time_s,
+            position_rad=position_rad,
+            target_position_rad=target_rad,
+        )
         settings = self.pd_controller.settings()
         return {
             "target_position_rad": settings["target_position_rad"],
@@ -626,19 +780,56 @@ class LearningPanelServer:
             "kd": settings["kd"],
         }
 
+    def set_response_criteria(
+        self, tolerance_deg: float, hold_time_s: float
+    ) -> dict[str, float]:
+        if self.pd_controller is None or self.step_response_analyzer is None:
+            raise ValueError("当前不是 PD 控制模式")
+        if tolerance_deg > 30.0:
+            raise ValueError("允许角度误差不能大于 30°")
+        if hold_time_s > 10.0:
+            raise ValueError("连续保持时间不能大于 10 秒")
+        tolerance_rad = tolerance_deg * 3.141592653589793 / 180.0
+        self.step_response_analyzer.configure(
+            tolerance_rad=tolerance_rad,
+            hold_time_s=hold_time_s,
+        )
+        return {
+            "tolerance_deg": tolerance_deg,
+            "hold_time_s": hold_time_s,
+        }
+
     def set_gravity_compensation(self, enabled: bool) -> dict[str, bool]:
         if self.pd_controller is None or self.gravity_compensation is None:
             raise ValueError("当前不是 PD 控制模式")
-        return {
-            "gravity_compensation_enabled": (
-                self.gravity_compensation.set_enabled(enabled)
+        compensation_enabled = self.gravity_compensation.set_enabled(enabled)
+        if self.step_response_analyzer is not None:
+            qpos_address = self.model.jnt_qposadr[self.joint_id]
+            with self._lock:
+                time_s = float(self.data.time)
+                position_rad = float(self.data.qpos[qpos_address])
+            target_rad = self.pd_controller.settings()["target_position_rad"]
+            self.step_response_analyzer.start(
+                time_s=time_s,
+                position_rad=position_rad,
+                target_position_rad=target_rad,
             )
-        }
+        return {"gravity_compensation_enabled": compensation_enabled}
 
     def reset(self) -> None:
         with self._lock:
             mujoco.mj_resetData(self.model, self.data)
             self.data.ctrl[self.actuator_id] = 0.0
+            time_s = float(self.data.time)
+            qpos_address = self.model.jnt_qposadr[self.joint_id]
+            position_rad = float(self.data.qpos[qpos_address])
+        if self.pd_controller is not None and self.step_response_analyzer is not None:
+            target_rad = self.pd_controller.settings()["target_position_rad"]
+            self.step_response_analyzer.start(
+                time_s=time_s,
+                position_rad=position_rad,
+                target_position_rad=target_rad,
+            )
 
     def _make_handler_type(self) -> type[BaseHTTPRequestHandler]:
         panel = self
@@ -671,6 +862,13 @@ class LearningPanelServer:
                     elif self.path == "/api/gravity-compensation":
                         self._send_json(
                             panel.set_gravity_compensation(body["enabled"])
+                        )
+                    elif self.path == "/api/response-criteria":
+                        self._send_json(
+                            panel.set_response_criteria(
+                                float(body["tolerance_deg"]),
+                                float(body["hold_time_s"]),
+                            )
                         )
                     elif self.path == "/api/reset":
                         panel.reset()

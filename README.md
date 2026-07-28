@@ -6,7 +6,7 @@ LinkJoin Robo SIM 是一个面向初学者的学习型工程：用仿真逐步�
 
 ## 当前状态
 
-Phase 1（单关节恒力矩）、Phase 2（PD 闭环控制）和 Phase 2.5（重力补偿）已完成：可以在原生 MuJoCo Viewer + 中文面板中观察反馈控制，实时开关重力补偿，并在网页曲线上比较 PD、补偿和实际总力矩。下一阶段是把当前杆明确映射为膝关节/小腿摆杆。
+Phase 1（单关节恒力矩）、Phase 2（PD 闭环控制）、Phase 2.5（重力补偿）和 Phase 2.6（响应时间）已完成：可以在原生 MuJoCo Viewer + 中文面板中观察反馈控制，实时开关重力补偿，并测量首次到达、上升时间、稳定时间和最大超调。下一阶段是把当前杆明确映射为膝关节/小腿摆杆。
 
 权威路线图见 [`docs/work_plan.md`](docs/work_plan.md)，完成记录见 [`docs/progress_log.md`](docs/progress_log.md)。
 
@@ -42,10 +42,11 @@ python experiments/001_single_joint_pd/run.py \
 
 ```bash
 python experiments/001_single_joint_pd/run.py \
-  --mode pd --view --target-deg 30 --kp 5 --kd 3
+  --mode pd --view --target-deg 45 --kp 5 --kd 3 \
+  --gravity-compensation
 ```
 
-`--view` 会同时打开官方 3D Viewer 和中文学习控制面板。PD 模式下，面板提供 Watch 下拉框、实时中文解释、目标角度、`Kp/Kd` 精确输入、重力补偿开关、误差和力矩限幅状态；动态曲线会拆分 PD、重力补偿和实际总力矩。启动时也可加 `--gravity-compensation` 默认开启补偿。`--mode torque` 仍保留精确扭矩输入、滑块和预设按钮。若不想自动打开浏览器，可添加 `--no-browser`，再访问终端打印的本地 URL。
+`--view` 会同时打开官方 3D Viewer 和中文学习控制面板。PD 模式下，面板提供 Watch 下拉框、实时中文解释、目标角度、`Kp/Kd` 精确输入、重力补偿开关、误差和力矩限幅状态；动态曲线会拆分 PD、重力补偿和实际总力矩。响应时间区默认以 `±1°` 且连续保持 `0.5 s` 判定稳定，显示首次到达、上升时间、稳定时间和超调，判定值可修改。`--mode torque` 仍保留精确扭矩输入、滑块和预设按钮。若不想自动打开浏览器，可添加 `--no-browser`，再访问终端打印的本地 URL。
 
 ## 目录导览
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 import mujoco
 import pytest
 
+from robo_sim.analysis.step_response import StepResponseAnalyzer
 from robo_sim.controllers.gravity import GravityCompensationSwitch
 from robo_sim.controllers.pd import PDController
 from robo_sim.ui.learning_panel import LearningPanelServer
@@ -92,6 +94,19 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         torque_max_nm=2.0,
     )
     gravity_compensation = GravityCompensationSwitch(enabled=False)
+    response_analyzer = StepResponseAnalyzer(
+        tolerance_rad=math.radians(1.0),
+        hold_time_s=0.5,
+    )
+    response_analyzer.start(
+        time_s=0.0,
+        position_rad=0.0,
+        target_position_rad=0.5,
+    )
+    response_analyzer.observe(time_s=1.0, position_rad=0.2)
+    measurement_id_before_panel_read = response_analyzer.snapshot()[
+        "measurement_id"
+    ]
     panel = LearningPanelServer(
         model,
         data,
@@ -99,6 +114,7 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         actuator_id,
         pd_controller=controller,
         gravity_compensation=gravity_compensation,
+        step_response_analyzer=response_analyzer,
     )
     panel.start()
 
@@ -114,10 +130,23 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert "PD 是 PID 里的 P + D" in html
         assert "重力补偿" in html
         assert 'id="toggleGravityCompensation"' in html
+        assert "响应时间测量" in html
+        assert 'id="settlingTime"' in html
+        assert "连续保持" in html
         assert "请在 MuJoCo Viewer 左侧 Simulation 区域点击 Run" in html
         assert "[hidden] { display: none !important; }" in html
         assert '<section id="watchControl"' in html
         assert '<section id="torqueControl" class="card" hidden>' in html
+
+        with urllib.request.urlopen(panel.url + "api/state", timeout=2) as response:
+            initial_state = json.load(response)
+        assert (
+            initial_state["step_response"]["measurement_id"]
+            == measurement_id_before_panel_read
+        )
+        assert initial_state["step_response"]["elapsed_time_s"] == pytest.approx(
+            1.0
+        )
 
         result = post_json(
             panel.url + "api/pd",
@@ -143,6 +172,18 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert "bias_torque_nm" in state
         assert state["gravity_compensation_enabled"] is False
         assert state["gravity_compensation_torque_nm"] == pytest.approx(0.0)
+        response = state["step_response"]
+        assert response["status"] == "tracking"
+        assert response["tolerance_deg"] == pytest.approx(1.0)
+        assert response["hold_time_s"] == pytest.approx(0.5)
+        assert response["target_position_deg"] == pytest.approx(25.0)
+
+        criteria = post_json(
+            panel.url + "api/response-criteria",
+            {"tolerance_deg": 0.5, "hold_time_s": 0.25},
+        )
+        assert criteria["tolerance_deg"] == pytest.approx(0.5)
+        assert criteria["hold_time_s"] == pytest.approx(0.25)
 
         result = post_json(
             panel.url + "api/gravity-compensation", {"enabled": True}
@@ -159,6 +200,18 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert compensated_state["raw_torque_nm"] == pytest.approx(
             compensated_state["pd_torque_nm"]
             + compensated_state["gravity_compensation_torque_nm"]
+        )
+
+        measurement_id = compensated_state["step_response"]["measurement_id"]
+        post_json(panel.url + "api/reset", {})
+        with urllib.request.urlopen(panel.url + "api/state", timeout=2) as response:
+            reset_state = json.load(response)
+        assert reset_state["step_response"]["measurement_id"] > measurement_id
+        assert reset_state["step_response"]["initial_position_deg"] == pytest.approx(
+            0.0
+        )
+        assert reset_state["step_response"]["target_position_deg"] == pytest.approx(
+            25.0
         )
 
         with pytest.raises(urllib.error.HTTPError) as error:

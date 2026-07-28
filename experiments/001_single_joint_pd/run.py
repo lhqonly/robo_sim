@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import mujoco
+from robo_sim.analysis.step_response import StepResponseAnalyzer
 from robo_sim.controllers.gravity import GravityCompensationSwitch
 from robo_sim.controllers.pd import PDController
 from robo_sim.ui.learning_panel import LearningPanelServer
@@ -24,6 +25,8 @@ from robo_sim.ui.learning_panel import LearningPanelServer
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_PATH = PROJECT_ROOT / "models" / "single_joint" / "single_joint.xml"
 VIEWER_WORKER_ENV = "ROBO_SIM_VIEWER_WORKER"
+DEFAULT_SETTLING_TOLERANCE_DEG = 1.0
+DEFAULT_SETTLING_HOLD_S = 0.5
 
 
 @dataclass(frozen=True)
@@ -129,6 +132,32 @@ def evenly_spaced_samples(
     return [samples[round(index * last / (sample_count - 1))] for index in range(sample_count)]
 
 
+def analyze_pd_response(
+    samples: list[PDSample],
+    *,
+    tolerance_deg: float,
+    hold_time_s: float,
+) -> dict[str, float | int | str | None]:
+    """Calculate response timing from the full-rate headless samples."""
+    if not samples:
+        raise ValueError("at least one PD sample is required")
+    analyzer = StepResponseAnalyzer(
+        tolerance_rad=math.radians(tolerance_deg),
+        hold_time_s=hold_time_s,
+    )
+    analyzer.start(
+        time_s=samples[0].time_s,
+        position_rad=samples[0].position_rad,
+        target_position_rad=samples[0].target_position_rad,
+    )
+    for sample in samples[1:]:
+        analyzer.observe(
+            time_s=sample.time_s,
+            position_rad=sample.position_rad,
+        )
+    return analyzer.snapshot()
+
+
 def simulate_constant_torque(
     torque_nm: float, duration_s: float, sample_count: int
 ) -> list[Sample]:
@@ -228,6 +257,8 @@ def run_managed_viewer_worker(
     kd: float,
     control_port: int,
     gravity_compensation: bool,
+    settling_tolerance_deg: float,
+    settling_hold_s: float,
 ) -> Sample:
     """Run MuJoCo's managed GUI inside the isolated worker process."""
     model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
@@ -244,6 +275,7 @@ def run_managed_viewer_worker(
 
     pd_controller: PDController | None = None
     gravity_switch: GravityCompensationSwitch | None = None
+    step_response_analyzer: StepResponseAnalyzer | None = None
     if mode == "pd":
         joint_min, joint_max = model.jnt_range[joint_id]
         if not joint_min <= target_position_rad <= joint_max:
@@ -263,6 +295,15 @@ def run_managed_viewer_worker(
         gravity_switch = GravityCompensationSwitch(
             enabled=gravity_compensation
         )
+        step_response_analyzer = StepResponseAnalyzer(
+            tolerance_rad=math.radians(settling_tolerance_deg),
+            hold_time_s=settling_hold_s,
+        )
+        step_response_analyzer.start(
+            time_s=float(data.time),
+            position_rad=float(data.qpos[qpos_address]),
+            target_position_rad=target_position_rad,
+        )
         mujoco.mj_forward(model, data)
 
         def pd_callback(
@@ -278,6 +319,10 @@ def run_managed_viewer_worker(
                 feedforward_torque_nm=compensation_torque,
             )
             callback_data.ctrl[actuator_id] = output.torque_nm
+            step_response_analyzer.observe(
+                time_s=float(callback_data.time),
+                position_rad=float(callback_data.qpos[qpos_address]),
+            )
 
         pd_callback(model, data)
         mujoco.set_mjcb_control(pd_callback)
@@ -291,6 +336,7 @@ def run_managed_viewer_worker(
         port=control_port,
         pd_controller=pd_controller,
         gravity_compensation=gravity_switch,
+        step_response_analyzer=step_response_analyzer,
     )
     panel.start()
 
@@ -358,6 +404,8 @@ def run_viewer_subprocess(
     kp: float,
     kd: float,
     gravity_compensation: bool,
+    settling_tolerance_deg: float,
+    settling_hold_s: float,
     open_browser: bool = True,
 ) -> int:
     """Keep terminal signal handling outside the native GUI process."""
@@ -372,6 +420,10 @@ def run_viewer_subprocess(
             target_position_rad=target_position_rad,
             torque_min_nm=-2.0,
             torque_max_nm=2.0,
+        )
+        StepResponseAnalyzer(
+            tolerance_rad=math.radians(settling_tolerance_deg),
+            hold_time_s=settling_hold_s,
         )
         if not -2.094 <= target_position_rad <= 2.094:
             raise ValueError("target must be within [-120.0, 120.0] degrees")
@@ -400,6 +452,10 @@ def run_viewer_subprocess(
         str(kd),
         "--control-port",
         str(control_port),
+        "--settling-tolerance-deg",
+        str(settling_tolerance_deg),
+        "--settling-hold-s",
+        str(settling_hold_s),
     ]
     if gravity_compensation:
         child_args.append("--gravity-compensation")
@@ -508,6 +564,18 @@ def build_parser() -> argparse.ArgumentParser:
             "limit (PD mode)"
         ),
     )
+    parser.add_argument(
+        "--settling-tolerance-deg",
+        type=float,
+        default=DEFAULT_SETTLING_TOLERANCE_DEG,
+        help="steady-state angle error band in degrees (default: 1.0)",
+    )
+    parser.add_argument(
+        "--settling-hold-s",
+        type=float,
+        default=DEFAULT_SETTLING_HOLD_S,
+        help="time that error must remain in the band (default: 0.5)",
+    )
     parser.add_argument("--control-port", type=int, default=0, help=argparse.SUPPRESS)
     return parser
 
@@ -527,6 +595,8 @@ def main() -> int:
                 kd=args.kd,
                 control_port=args.control_port,
                 gravity_compensation=args.gravity_compensation,
+                settling_tolerance_deg=args.settling_tolerance_deg,
+                settling_hold_s=args.settling_hold_s,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -553,6 +623,8 @@ def main() -> int:
                 kp=args.kp,
                 kd=args.kd,
                 gravity_compensation=args.gravity_compensation,
+                settling_tolerance_deg=args.settling_tolerance_deg,
+                settling_hold_s=args.settling_hold_s,
                 open_browser=not args.no_browser,
             )
         except ValueError as exc:
@@ -597,6 +669,50 @@ def main() -> int:
             "Final tracking error: "
             f"{final_pd.position_error_rad:.6f} rad / "
             f"{math.degrees(final_pd.position_error_rad):.3f} deg"
+        )
+        try:
+            response = analyze_pd_response(
+                pd_samples,
+                tolerance_deg=args.settling_tolerance_deg,
+                hold_time_s=args.settling_hold_s,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            "Response rule: "
+            f"error within ±{args.settling_tolerance_deg:g} deg for "
+            f"{args.settling_hold_s:g} s"
+        )
+        print(
+            "Rise time (10%-90%): "
+            + (
+                "not reached"
+                if response["rise_time_s"] is None
+                else f"{float(response['rise_time_s']):.3f} s"
+            )
+        )
+        print(
+            "First arrival: "
+            + (
+                "not reached"
+                if response["first_arrival_time_s"] is None
+                else f"{float(response['first_arrival_time_s']):.3f} s"
+            )
+        )
+        print(
+            "Settling time: "
+            + (
+                "not settled"
+                if response["settling_time_s"] is None
+                else f"{float(response['settling_time_s']):.3f} s "
+                f"(confirmed at "
+                f"{float(response['settling_confirmed_time_s']):.3f} s)"
+            )
+        )
+        print(
+            "Maximum overshoot: "
+            f"{math.degrees(float(response['overshoot_rad'])):.3f} deg / "
+            f"{float(response['overshoot_percent']):.2f}%"
         )
         return 0
 

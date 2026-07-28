@@ -144,3 +144,9 @@ def test_gravity_compensation_removes_most_pd_steady_state_error() -> None:
     assert pure_error > 5.0
     assert compensated_error < 0.1
     assert "gravity_compensation=on" in compensated.stdout
+    settling_match = re.search(
+        r"Settling time: ([0-9.]+) s", compensated.stdout
+    )
+    assert settling_match is not None
+    assert 0.0 < float(settling_match.group(1)) < 5.0
+    assert "Maximum overshoot:" in compensated.stdout
