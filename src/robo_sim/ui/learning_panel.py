@@ -199,6 +199,28 @@ PANEL_HTML = """<!doctype html>
       注意：这里只测仿真时间，不包含真实传感器、通信、电机驱动和人体反作用延迟。
     </div>
 
+    <h3>外骨骼调参体检（当前仿真）</h3>
+    <div class="insight">
+      先看能否准确稳定，再看动作是否过猛、电机是否长期顶住上限。
+      所有参数使用目标改变后的前 3 秒，保证不同 Kp/Kd 在相同时间窗口内公平比较。
+    </div>
+    <div class="metrics-grid" style="margin-top:12px">
+      <div class="metric">角度误差 RMSE<strong id="trackingRmse">--</strong></div>
+      <div class="metric">累计绝对误差 IAE<strong id="integratedError">--</strong></div>
+      <div class="metric">峰值角速度<strong id="peakVelocity">--</strong></div>
+      <div class="metric">峰值角加速度<strong id="peakAcceleration">--</strong></div>
+      <div class="metric">峰值 jerk（动作突变）<strong id="peakJerk">--</strong></div>
+      <div class="metric">峰值电机力矩<strong id="peakTorque">--</strong></div>
+      <div class="metric">力矩限幅时间 / 占比<strong id="saturationLoad">--</strong></div>
+      <div class="metric">累计机械功 |τ·ω|<strong id="mechanicalWork">--</strong></div>
+      <div class="metric">本组指标统计窗口<strong id="evaluationWindow">--</strong></div>
+    </div>
+    <div class="muted" style="margin-top:10px">
+      RMSE/IAE 越小表示总体跟踪越准；速度、加速度和 jerk 越大，动作通常越猛；
+      限幅时间越长，说明电机越久都在“踩满油门”。这些是仿真调参指标，不是人体安全认证。
+      人体交互力矩、绑带压力和步态相位延迟需要后续人体模型或真实传感器。
+    </div>
+
     <div class="chart-block">
       <div class="chart-title">角速度
         <span class="legend" style="--legend-color:#fbbf24">实际角速度</span>
@@ -322,6 +344,22 @@ function renderState(state) {
     $('overshoot').textContent =
       `${format(response.overshoot_deg, 2)}° / ${format(response.overshoot_percent, 1)}%`;
     $('responseCurrentError').textContent = `${format(response.current_error_deg, 2)}°`;
+    $('trackingRmse').textContent = `${format(response.tracking_rmse_deg, 2)}°`;
+    $('integratedError').textContent =
+      `${format(response.integrated_absolute_error_deg_s, 2)} °·s`;
+    $('peakVelocity').textContent = `${format(response.peak_velocity_deg_s, 1)} °/s`;
+    $('peakAcceleration').textContent =
+      `${format(response.peak_acceleration_deg_s2, 1)} °/s²`;
+    $('peakJerk').textContent = `${format(response.peak_jerk_deg_s3, 1)} °/s³`;
+    $('peakTorque').textContent = `${format(response.peak_torque_nm, 3)} N·m`;
+    $('saturationLoad').textContent =
+      `${format(response.saturation_time_s, 3)} s / ` +
+      `${format(response.saturation_percent, 1)}%`;
+    $('mechanicalWork').textContent =
+      `${format(response.absolute_mechanical_work_j, 3)} J`;
+    $('evaluationWindow').textContent =
+      `${format(response.evaluation_window_s, 3)} / ` +
+      `${format(response.evaluation_window_target_s, 1)} s`;
     $('responseExperiment').textContent =
       `本轮 #${response.measurement_id}：` +
       `${format(response.initial_position_deg, 2)}° → ` +
@@ -705,6 +743,9 @@ class LearningPanelServer:
                 self.step_response_analyzer.observe(
                     time_s=float(snapshot["time"]),
                     position_rad=float(snapshot["qpos"]),
+                    velocity_rad_s=float(snapshot["qvel"]),
+                    torque_nm=output.torque_nm,
+                    saturated=output.saturated,
                 )
             step_response = self.step_response_analyzer.snapshot()
             step_response.update(
@@ -732,6 +773,31 @@ class LearningPanelServer:
                     / 3.141592653589793,
                     "current_error_deg": float(
                         step_response["current_error_rad"]
+                    )
+                    * 180.0
+                    / 3.141592653589793,
+                    "tracking_rmse_deg": float(
+                        step_response["tracking_rmse_rad"]
+                    )
+                    * 180.0
+                    / 3.141592653589793,
+                    "integrated_absolute_error_deg_s": float(
+                        step_response["integrated_absolute_error_rad_s"]
+                    )
+                    * 180.0
+                    / 3.141592653589793,
+                    "peak_velocity_deg_s": float(
+                        step_response["peak_velocity_rad_s"]
+                    )
+                    * 180.0
+                    / 3.141592653589793,
+                    "peak_acceleration_deg_s2": float(
+                        step_response["peak_acceleration_rad_s2"]
+                    )
+                    * 180.0
+                    / 3.141592653589793,
+                    "peak_jerk_deg_s3": float(
+                        step_response["peak_jerk_rad_s3"]
                     )
                     * 180.0
                     / 3.141592653589793,

@@ -149,11 +149,17 @@ def analyze_pd_response(
         time_s=samples[0].time_s,
         position_rad=samples[0].position_rad,
         target_position_rad=samples[0].target_position_rad,
+        velocity_rad_s=samples[0].velocity_rad_s,
+        torque_nm=samples[0].torque_nm,
+        saturated=samples[0].saturated,
     )
     for sample in samples[1:]:
         analyzer.observe(
             time_s=sample.time_s,
             position_rad=sample.position_rad,
+            velocity_rad_s=sample.velocity_rad_s,
+            torque_nm=sample.torque_nm,
+            saturated=sample.saturated,
         )
     return analyzer.snapshot()
 
@@ -322,6 +328,9 @@ def run_managed_viewer_worker(
             step_response_analyzer.observe(
                 time_s=float(callback_data.time),
                 position_rad=float(callback_data.qpos[qpos_address]),
+                velocity_rad_s=float(callback_data.qvel[qvel_address]),
+                torque_nm=output.torque_nm,
+                saturated=output.saturated,
             )
 
         pd_callback(model, data)

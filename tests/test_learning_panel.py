@@ -198,6 +198,10 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert "重力补偿" in html
         assert 'id="toggleGravityCompensation"' in html
         assert "响应时间测量" in html
+        assert "外骨骼调参体检（当前仿真）" in html
+        assert 'id="trackingRmse"' in html
+        assert 'id="peakJerk"' in html
+        assert 'id="saturationLoad"' in html
         assert 'id="settlingTime"' in html
         assert "连续保持" in html
         assert "应用参数并从 0° 开始测试" in html
@@ -246,6 +250,12 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert response["tolerance_deg"] == pytest.approx(1.0)
         assert response["hold_time_s"] == pytest.approx(0.5)
         assert response["target_position_deg"] == pytest.approx(25.0)
+        assert "tracking_rmse_deg" in response
+        assert "peak_velocity_deg_s" in response
+        assert "peak_acceleration_deg_s2" in response
+        assert "peak_jerk_deg_s3" in response
+        assert "saturation_time_s" in response
+        assert "absolute_mechanical_work_j" in response
         measurement_id_after_target_change = response["measurement_id"]
 
         post_json(

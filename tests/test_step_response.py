@@ -113,3 +113,79 @@ def test_backward_time_sample_does_not_restart_explicit_measurement() -> None:
     assert result["initial_position_rad"] == pytest.approx(0.0)
     assert result["target_position_rad"] == pytest.approx(1.0)
     assert result["status"] == "tracking"
+
+
+def test_step_response_quantifies_motion_and_actuator_load() -> None:
+    analyzer = StepResponseAnalyzer(tolerance_rad=0.05, hold_time_s=0.2)
+    analyzer.start(
+        time_s=0.0,
+        position_rad=0.0,
+        target_position_rad=1.0,
+        velocity_rad_s=0.0,
+        torque_nm=0.0,
+        saturated=False,
+    )
+    analyzer.observe(
+        time_s=1.0,
+        position_rad=0.5,
+        velocity_rad_s=1.0,
+        torque_nm=2.0,
+        saturated=True,
+    )
+    analyzer.observe(
+        time_s=2.0,
+        position_rad=1.0,
+        velocity_rad_s=0.0,
+        torque_nm=1.0,
+        saturated=False,
+    )
+
+    result = analyzer.snapshot()
+    assert result["evaluation_window_s"] == pytest.approx(2.0)
+    assert result["tracking_rmse_rad"] == pytest.approx(math.sqrt(0.375))
+    assert result["integrated_absolute_error_rad_s"] == pytest.approx(1.0)
+    assert result["peak_velocity_rad_s"] == pytest.approx(1.0)
+    assert result["peak_acceleration_rad_s2"] == pytest.approx(1.0)
+    assert result["peak_jerk_rad_s3"] == pytest.approx(2.0)
+    assert result["peak_torque_nm"] == pytest.approx(2.0)
+    assert result["saturation_time_s"] == pytest.approx(1.0)
+    assert result["saturation_percent"] == pytest.approx(50.0)
+    assert result["control_effort_nm2_s"] == pytest.approx(4.5)
+    assert result["absolute_mechanical_work_j"] == pytest.approx(2.0)
+
+
+def test_performance_metrics_use_same_fixed_comparison_window() -> None:
+    analyzer = StepResponseAnalyzer(
+        tolerance_rad=0.05,
+        hold_time_s=0.2,
+        evaluation_window_s=1.0,
+    )
+    analyzer.start(
+        time_s=0.0,
+        position_rad=0.0,
+        target_position_rad=1.0,
+        velocity_rad_s=0.0,
+        torque_nm=0.0,
+        saturated=False,
+    )
+    analyzer.observe(
+        time_s=1.0,
+        position_rad=1.0,
+        velocity_rad_s=0.0,
+        torque_nm=0.0,
+        saturated=False,
+    )
+    analyzer.observe(
+        time_s=2.0,
+        position_rad=0.0,
+        velocity_rad_s=10.0,
+        torque_nm=10.0,
+        saturated=True,
+    )
+
+    result = analyzer.snapshot()
+    assert result["evaluation_window_s"] == pytest.approx(1.0)
+    assert result["evaluation_window_target_s"] == pytest.approx(1.0)
+    assert result["peak_velocity_rad_s"] == pytest.approx(0.0)
+    assert result["peak_torque_nm"] == pytest.approx(0.0)
+    assert result["saturation_time_s"] == pytest.approx(0.0)
