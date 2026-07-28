@@ -67,8 +67,8 @@ PANEL_HTML = """<!doctype html>
   <section id="watchControl" class="card">
     <label for="watchField">Watch Field（观察变量）</label>
     <select id="watchField">
-      <option value="qpos">qpos — 关节角度</option>
-      <option value="qvel">qvel — 关节角速度</option>
+      <option value="qpos">qpos — 关节角度（rad / degree）</option>
+      <option value="qvel">qvel — 关节角速度（rad/s / degree/s）</option>
       <option value="ctrl">ctrl — 电机指令扭矩</option>
       <option value="actuator_force">actuator_force — 执行器实际输出</option>
     </select>
@@ -172,8 +172,8 @@ PANEL_HTML = """<!doctype html>
 </main>
 <script>
 const definitions = {
-  qpos: {unit: 'rad', text: '关节当前位置。弧度换算角度：rad × 180 / π。'},
-  qvel: {unit: 'rad/s', text: '关节角速度。正负号表示方向，接近 0 表示基本停止。'},
+  qpos: {unit: 'rad', text: '关节当前位置，同时显示弧度 rad 和角度 degree。'},
+  qvel: {unit: 'rad/s', text: '关节角速度，同时显示 rad/s 和 degree/s；接近 0 表示基本停止。'},
   ctrl: {unit: 'N·m', text: '发送给 joint_motor 的指令扭矩，是输入，不是目标角度。'},
   actuator_force: {unit: 'N·m', text: 'MuJoCo 执行器当前实际输出；本模型 gear=1，通常接近 ctrl。'}
 };
@@ -189,7 +189,13 @@ function renderWatch() {
   if (!latest) return;
   const key = $('watchField').value;
   const def = definitions[key];
-  $('watchValue').textContent = `${format(latest[key])} ${def.unit}`;
+  if (key === 'qpos') {
+    $('watchValue').textContent = `${format(latest.qpos)} rad / ${format(latest.qpos_deg, 2)}°`;
+  } else if (key === 'qvel') {
+    $('watchValue').textContent = `${format(latest.qvel)} rad/s / ${format(latest.qvel * 180 / Math.PI, 2)}°/s`;
+  } else {
+    $('watchValue').textContent = `${format(latest[key])} ${def.unit}`;
+  }
   $('watchDescription').textContent = def.text;
 }
 function renderState(state) {

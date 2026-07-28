@@ -42,6 +42,9 @@ def test_learning_panel_serves_chinese_watch_fields_and_exact_torque() -> None:
             html = response.read().decode("utf-8")
         assert "Watch Field（观察变量）" in html
         assert "qpos — 关节角度" in html
+        assert "rad / degree" in html
+        assert "format(latest.qpos_deg, 2)" in html
+        assert "degree/s" in html
         assert "joint_motor 精确扭矩输入" in html
 
         result = post_json(panel.url + "api/torque", {"value": 1.234})

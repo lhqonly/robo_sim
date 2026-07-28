@@ -1,5 +1,9 @@
 # Progress Log
 
+## 2026-07-28 — Phase 2：Watch 同时显示弧度与角度制
+
+中文面板的 Watch 在选择 `qpos` 时同步显示 `rad / degree`，选择 `qvel` 时同步显示 `rad/s / degree/s`，与下方状态卡保持一致，减少初学阶段频繁手算弧度的负担。
+
 ## 2026-07-10 — Phase 2：只保留网页动态曲线
 
 按学习体验反馈，移除静态 PNG 和 `--plot/--compare` 命令；Phase 2 的目标、实际角度、速度、raw/applied 力矩只在中文网页中动态显示。PD 页面启动时即隐藏 `joint_motor` 手动输入区，避免与“力矩由控制器自动计算”产生冲突；该输入区仅在 Phase 1 恒扭矩模式保留。

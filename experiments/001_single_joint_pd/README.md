@@ -73,7 +73,7 @@ Viewer 中蓝色方块是固定基座，黄色圆柱是简化的关节/电机位
 
 共同功能：
 
-- Watch 下拉框：`qpos`（关节角度）、`qvel`（角速度）、`ctrl`（指令扭矩）、`actuator_force`（实际输出）。
+- Watch 下拉框：`qpos` 同时显示 `rad / degree`，`qvel` 同时显示 `rad/s / degree/s`；还可观察 `ctrl`（指令扭矩）和 `actuator_force`（实际输出）。
 - 每个字段显示中文含义、单位和实时值。
 - 重置按钮：恢复初始姿态。
 
