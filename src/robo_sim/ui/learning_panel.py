@@ -10,6 +10,7 @@ from typing import Any
 
 import mujoco
 
+from robo_sim.controllers.gravity import GravityCompensationSwitch
 from robo_sim.controllers.pd import PDController
 
 
@@ -93,7 +94,9 @@ PANEL_HTML = """<!doctype html>
       </div>
     </div>
     <button id="applyPd" class="primary">应用目标与增益</button>
+    <button id="toggleGravityCompensation">重力补偿：关闭（点击开启）</button>
     <div class="muted">PD 是 PID 里的 P + D：P 看“还差多远”，D 看“现在动得多快”并负责刹车。I 会累积长期误差，后续单独学习。</div>
+    <div class="muted">重力补偿不是 I：它让模型先用一部分力托住杆的重量，再由 PD 负责对准目标和刹车。</div>
     <div id="pdStatus" class="status"></div>
   </section>
 
@@ -118,19 +121,22 @@ PANEL_HTML = """<!doctype html>
       <div class="metric">角速度 qvel<strong id="qvel">--</strong></div>
       <div class="metric">电机输入 ctrl<strong id="ctrl">--</strong></div>
       <div id="errorMetric" class="metric" hidden>位置误差<strong id="positionError">--</strong></div>
-      <div id="rawTorqueMetric" class="metric" hidden>限幅前 PD 力矩<strong id="rawTorque">--</strong></div>
+      <div id="rawTorqueMetric" class="metric" hidden>限幅前总力矩<strong id="rawTorque">--</strong></div>
+      <div id="pdTorqueMetric" class="metric" hidden>PD 力矩（P + D）<strong id="pdTorque">--</strong></div>
+      <div id="gravityTorqueMetric" class="metric" hidden>重力补偿力矩<strong id="gravityTorque">--</strong></div>
     </div>
     <button id="reset" class="danger">重置姿态</button>
   </section>
 
   <section id="pdInsightCard" class="card" hidden>
-    <h2 style="margin-top:0">为什么停在这里，没有到目标？</h2>
+    <h2 id="equilibriumTitle" style="margin-top:0">为什么停在这里，没有到目标？</h2>
     <div id="equilibriumExplanation" class="insight">正在计算重力与 PD 平衡……</div>
     <div class="grid" style="margin-top:12px">
       <div class="metric">停在目标需要的力矩<strong id="targetHoldTorque">--</strong></div>
       <div class="metric">停在当前位置需要的力矩<strong id="biasTorque">--</strong></div>
       <div class="metric">P 项：Kp × 位置误差<strong id="pTorque">--</strong></div>
       <div class="metric">D 项：Kd × 速度误差<strong id="dTorque">--</strong></div>
+      <div class="metric">重力补偿项<strong id="gravityInsightTorque">--</strong></div>
     </div>
   </section>
 
@@ -156,8 +162,9 @@ PANEL_HTML = """<!doctype html>
     </div>
     <div class="chart-block">
       <div class="chart-title">控制力矩
-        <span class="legend" style="--legend-color:#9ca3af">限幅前 raw PD</span>
-        <span class="legend" style="--legend-color:#f97316">实际 applied</span>
+        <span class="legend" style="--legend-color:#a78bfa">PD（P + D）</span>
+        <span class="legend" style="--legend-color:#34d399">重力补偿</span>
+        <span class="legend" style="--legend-color:#f97316">实际总力矩</span>
         <span class="legend" style="--legend-color:#ef4444">±2 N·m 限幅</span>
       </div>
       <canvas id="torqueChart"></canvas>
@@ -202,12 +209,16 @@ function renderState(state) {
   latest = state;
   const pdMode = state.mode === 'pd';
   $('modeBadge').textContent = pdMode
-    ? 'Phase 2：PD 闭环控制（根据误差实时改变扭矩）'
+    ? (state.gravity_compensation_enabled
+      ? 'Phase 2.5：PD + 重力补偿（先托住重量，再纠正误差）'
+      : 'Phase 2：纯 PD 闭环控制（根据误差实时改变扭矩）')
     : 'Phase 1：恒扭矩开环控制';
   $('torqueControl').hidden = pdMode;
   $('pdControl').hidden = !pdMode;
   $('errorMetric').hidden = !pdMode;
   $('rawTorqueMetric').hidden = !pdMode;
+  $('pdTorqueMetric').hidden = !pdMode;
+  $('gravityTorqueMetric').hidden = !pdMode;
   $('pdInsightCard').hidden = !pdMode;
   $('responseCard').hidden = !pdMode;
   $('time').textContent = `${format(state.time, 3)} s`;
@@ -217,27 +228,48 @@ function renderState(state) {
   if (pdMode) {
     $('positionError').textContent = `${format(state.position_error_rad)} rad / ${format(state.position_error_deg, 2)}°`;
     $('rawTorque').textContent = `${format(state.raw_torque_nm, 3)} N·m`;
+    $('pdTorque').textContent = `${format(state.pd_torque_nm, 3)} N·m`;
+    $('gravityTorque').textContent = `${format(state.gravity_compensation_torque_nm, 3)} N·m`;
     $('targetHoldTorque').textContent = `${format(state.target_hold_torque_nm, 3)} N·m`;
     $('biasTorque').textContent = `${format(state.bias_torque_nm, 3)} N·m`;
     $('pTorque').textContent = `${format(state.proportional_torque_nm, 3)} N·m`;
     $('dTorque').textContent = `${format(state.derivative_torque_nm, 3)} N·m`;
+    $('gravityInsightTorque').textContent = `${format(state.gravity_compensation_torque_nm, 3)} N·m`;
+    $('toggleGravityCompensation').textContent = state.gravity_compensation_enabled
+      ? '重力补偿：已开启（点击关闭）'
+      : '重力补偿：关闭（点击开启）';
+    $('toggleGravityCompensation').className = state.gravity_compensation_enabled ? 'primary' : '';
     $('pdStatus').textContent = state.saturated
       ? '当前已触及 ±2 N·m 力矩限幅（橙色杆不会得到更大的力矩）'
       : '当前力矩未触及限幅';
     if (document.activeElement !== $('targetInput')) $('targetInput').value = format(state.target_position_deg, 2);
     if (document.activeElement !== $('kpInput')) $('kpInput').value = format(state.kp, 2);
     if (document.activeElement !== $('kdInput')) $('kdInput').value = format(state.kd, 2);
-    $('controlRelation').textContent = '目标角度 − qpos → PD 控制器 → ctrl → MuJoCo → 新的 qpos/qvel';
-    definitions.ctrl.text = 'PD 控制器根据角度/速度误差实时算出的电机扭矩；原生 Viewer 紫色滑块会被控制器持续更新。';
+    $('controlRelation').textContent = state.gravity_compensation_enabled
+      ? '重力补偿先托住重量 + PD 修正误差 → ctrl → MuJoCo → 新的 qpos/qvel'
+      : '目标角度 − qpos → PD 控制器 → ctrl → MuJoCo → 新的 qpos/qvel';
+    definitions.ctrl.text = state.gravity_compensation_enabled
+      ? 'PD 力矩与重力补偿相加、再经过限幅后的电机总扭矩；原生 Viewer 紫色滑块会被持续更新。'
+      : '纯 PD 根据角度/速度误差实时算出的电机扭矩；原生 Viewer 紫色滑块会被持续更新。';
     const withinLimit = Math.abs(state.target_hold_torque_nm) <= 2;
     const torquePerDegree = state.kp * Math.PI / 180;
-    $('equilibriumExplanation').textContent =
-      `想停在 ${format(state.target_position_deg, 1)}°，电机需要持续提供约 ${format(state.target_hold_torque_nm, 3)} N·m，` +
-      `${withinLimit ? '这个数没有超过电机上限。' : '这个数已经超过电机上限。'}` +
-      `但纯 PD 一旦完全到达目标，误差就变成 0，它反而会命令电机输出 0，杆就会被重力拉回来。` +
-      `现在 Kp=${format(state.kp, 1)}，每相差 1° 只能增加约 ${format(torquePerDegree, 3)} N·m。` +
-      `小误差产生的力气不够，所以必须退到相差 ${format(Math.abs(state.position_error_deg), 2)}°，` +
-      `此时 P 项达到 ${format(state.proportional_torque_nm, 3)} N·m，刚好托住当前位置，杆才停下。`;
+    if (state.gravity_compensation_enabled) {
+      $('equilibriumTitle').textContent = '重力补偿现在做了什么？';
+      $('equilibriumExplanation').textContent =
+        `MuJoCo 根据杆的质量和当前姿态，算出现在需要约 ${format(state.bias_torque_nm, 3)} N·m 才能托住重量。` +
+        `重力补偿先给出 ${format(state.gravity_compensation_torque_nm, 3)} N·m；PD 不再需要故意保留很大的角度误差来出力，` +
+        `只负责修正剩余的 ${format(Math.abs(state.position_error_deg), 2)}° 误差和刹车。` +
+        `两部分相加后再经过 ±2 N·m 电机限幅。`;
+    } else {
+      $('equilibriumTitle').textContent = '为什么停在这里，没有到目标？';
+      $('equilibriumExplanation').textContent =
+        `想停在 ${format(state.target_position_deg, 1)}°，电机需要持续提供约 ${format(state.target_hold_torque_nm, 3)} N·m，` +
+        `${withinLimit ? '这个数没有超过电机上限。' : '这个数已经超过电机上限。'}` +
+        `但纯 PD 一旦完全到达目标，误差就变成 0，它反而会命令电机输出 0，杆就会被重力拉回来。` +
+        `现在 Kp=${format(state.kp, 1)}，每相差 1° 只能增加约 ${format(torquePerDegree, 3)} N·m。` +
+        `小误差产生的力气不够，所以必须退到相差 ${format(Math.abs(state.position_error_deg), 2)}°，` +
+        `此时 P 项达到 ${format(state.proportional_torque_nm, 3)} N·m，刚好托住当前位置，杆才停下。`;
+    }
     appendResponsePoint(state);
   } else {
     if (document.activeElement !== $('torqueInput')) $('torqueInput').value = format(state.ctrl, 3);
@@ -269,7 +301,8 @@ function appendResponsePoint(state) {
     target: state.target_position_deg,
     position: state.qpos_deg,
     velocity: state.qvel * 180 / Math.PI,
-    rawTorque: state.raw_torque_nm,
+    pdTorque: state.pd_torque_nm,
+    gravityTorque: state.gravity_compensation_torque_nm,
     torque: state.ctrl
   });
   const cutoff = state.time - 30;
@@ -360,7 +393,8 @@ function drawAllCharts() {
     {value: point => point.velocity, color: '#fbbf24', width: 2}
   ], {unit: 'deg/s', includeZero: true, minimumPadding: 2});
   drawChart($('torqueChart'), [
-    {value: point => point.rawTorque, color: '#9ca3af', dash: [4, 4], width: 2},
+    {value: point => point.pdTorque, color: '#a78bfa', dash: [4, 4], width: 2},
+    {value: point => point.gravityTorque, color: '#34d399', width: 2},
     {value: point => point.torque, color: '#f97316', width: 3}
   ], {
     unit: 'N·m', includeZero: true, extraValues: [-2, 2], minimumPadding: 0.2,
@@ -399,12 +433,24 @@ async function setPd() {
     await refresh();
   } catch (error) { $('pdStatus').textContent = error.message; }
 }
+async function toggleGravityCompensation() {
+  try {
+    const result = await post('/api/gravity-compensation', {
+      enabled: !latest.gravity_compensation_enabled
+    });
+    $('pdStatus').textContent = result.gravity_compensation_enabled
+      ? '已开启重力补偿：先托住重量，再由 PD 对准角度'
+      : '已关闭重力补偿：现在由纯 PD 独自对抗重力';
+    await refresh();
+  } catch (error) { $('pdStatus').textContent = error.message; }
+}
 $('watchField').addEventListener('change', renderWatch);
 $('applyTorque').addEventListener('click', () => setTorque($('torqueInput').value));
 $('torqueInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') setTorque(event.target.value); });
 $('torqueSlider').addEventListener('change', (event) => setTorque(event.target.value));
 document.querySelectorAll('[data-torque]').forEach((button) => button.addEventListener('click', () => setTorque(button.dataset.torque)));
 $('applyPd').addEventListener('click', setPd);
+$('toggleGravityCompensation').addEventListener('click', toggleGravityCompensation);
 [$('targetInput'), $('kpInput'), $('kdInput')].forEach((input) => input.addEventListener('keydown', (event) => { if (event.key === 'Enter') setPd(); }));
 $('toggleRecording').addEventListener('click', () => {
   recording = !recording;
@@ -439,12 +485,16 @@ class LearningPanelServer:
         actuator_id: int,
         port: int = 0,
         pd_controller: PDController | None = None,
+        gravity_compensation: GravityCompensationSwitch | None = None,
     ) -> None:
         self.model = model
         self.data = data
         self.joint_id = joint_id
         self.actuator_id = actuator_id
         self.pd_controller = pd_controller
+        self.gravity_compensation = gravity_compensation
+        if self.pd_controller is not None and self.gravity_compensation is None:
+            self.gravity_compensation = GravityCompensationSwitch(enabled=False)
         self._analysis_data = mujoco.MjData(model)
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer(
@@ -491,14 +541,19 @@ class LearningPanelServer:
                 "mode": "pd" if self.pd_controller is not None else "torque",
             }
         if self.pd_controller is not None:
+            with self._lock:
+                current_bias_torque = float(self.data.qfrc_bias[qvel_address])
+            compensation_torque = self.gravity_compensation.torque(
+                current_bias_torque
+            )
             output = self.pd_controller.compute(
                 position_rad=float(snapshot["qpos"]),
                 velocity_rad_s=float(snapshot["qvel"]),
+                feedforward_torque_nm=compensation_torque,
             )
             settings = self.pd_controller.settings()
             target_rad = settings["target_position_rad"]
             with self._lock:
-                current_bias_torque = float(self.data.qfrc_bias[qvel_address])
                 mujoco.mj_resetData(self.model, self._analysis_data)
                 self._analysis_data.qpos[qpos_address] = target_rad
                 mujoco.mj_forward(self.model, self._analysis_data)
@@ -516,6 +571,13 @@ class LearningPanelServer:
                     * 180.0
                     / 3.141592653589793,
                     "raw_torque_nm": output.raw_torque_nm,
+                    "pd_torque_nm": output.pd_torque_nm,
+                    "gravity_compensation_torque_nm": (
+                        output.feedforward_torque_nm
+                    ),
+                    "gravity_compensation_enabled": (
+                        self.gravity_compensation.enabled
+                    ),
                     "proportional_torque_nm": output.proportional_torque_nm,
                     "derivative_torque_nm": output.derivative_torque_nm,
                     "target_hold_torque_nm": target_hold_torque,
@@ -564,6 +626,15 @@ class LearningPanelServer:
             "kd": settings["kd"],
         }
 
+    def set_gravity_compensation(self, enabled: bool) -> dict[str, bool]:
+        if self.pd_controller is None or self.gravity_compensation is None:
+            raise ValueError("当前不是 PD 控制模式")
+        return {
+            "gravity_compensation_enabled": (
+                self.gravity_compensation.set_enabled(enabled)
+            )
+        }
+
     def reset(self) -> None:
         with self._lock:
             mujoco.mj_resetData(self.model, self.data)
@@ -596,6 +667,10 @@ class LearningPanelServer:
                                 float(body["kp"]),
                                 float(body["kd"]),
                             )
+                        )
+                    elif self.path == "/api/gravity-compensation":
+                        self._send_json(
+                            panel.set_gravity_compensation(body["enabled"])
                         )
                     elif self.path == "/api/reset":
                         panel.reset()

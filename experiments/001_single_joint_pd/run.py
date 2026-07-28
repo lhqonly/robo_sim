@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import mujoco
+from robo_sim.controllers.gravity import GravityCompensationSwitch
 from robo_sim.controllers.pd import PDController
 from robo_sim.ui.learning_panel import LearningPanelServer
 
@@ -44,6 +45,8 @@ class PDSample:
     velocity_rad_s: float
     target_position_rad: float
     position_error_rad: float
+    pd_torque_nm: float
+    gravity_compensation_torque_nm: float
     raw_torque_nm: float
     torque_nm: float
     saturated: bool
@@ -55,6 +58,7 @@ def simulate_pd(
     kp: float,
     kd: float,
     duration_s: float,
+    gravity_compensation: bool = False,
 ) -> list[PDSample]:
     """Run a headless PD loop and record every physics step."""
     if duration_s <= 0:
@@ -82,11 +86,17 @@ def simulate_pd(
         torque_min_nm=float(control_min),
         torque_max_nm=float(control_max),
     )
+    gravity_switch = GravityCompensationSwitch(enabled=gravity_compensation)
+    mujoco.mj_forward(model, data)
 
     def control_and_observe() -> PDSample:
+        compensation_torque = gravity_switch.torque(
+            float(data.qfrc_bias[qvel_address])
+        )
         output = controller.compute(
             position_rad=float(data.qpos[qpos_address]),
             velocity_rad_s=float(data.qvel[qvel_address]),
+            feedforward_torque_nm=compensation_torque,
         )
         data.ctrl[actuator_id] = output.torque_nm
         return PDSample(
@@ -95,6 +105,8 @@ def simulate_pd(
             velocity_rad_s=float(data.qvel[qvel_address]),
             target_position_rad=target_position_rad,
             position_error_rad=output.position_error_rad,
+            pd_torque_nm=output.pd_torque_nm,
+            gravity_compensation_torque_nm=output.feedforward_torque_nm,
             raw_torque_nm=output.raw_torque_nm,
             torque_nm=output.torque_nm,
             saturated=output.saturated,
@@ -184,7 +196,9 @@ def print_viewer_explanation(torque_nm: float) -> None:
     print("You can also focus this terminal and press Ctrl+C.\n", flush=True)
 
 
-def print_pd_viewer_explanation(target_deg: float, kp: float, kd: float) -> None:
+def print_pd_viewer_explanation(
+    target_deg: float, kp: float, kd: float, gravity_compensation: bool
+) -> None:
     """Explain what changes when the GUI is driven by feedback."""
     print("\nWhat the PD Viewer shows:")
     print("  blue box      = fixed base (it must not move)")
@@ -192,6 +206,10 @@ def print_pd_viewer_explanation(target_deg: float, kp: float, kd: float) -> None
     print("  orange rod    = the controlled 1 kg link")
     print(f"  target angle  = {target_deg:.1f} deg")
     print(f"  gains         = Kp={kp:g}, Kd={kd:g}")
+    print(
+        "  gravity help  = "
+        + ("ON (hold the link's weight first)" if gravity_compensation else "OFF")
+    )
     print("  motor torque  = recalculated from qpos/qvel every physics step")
     print("  torque limit  = [-2, 2] N·m")
     print(
@@ -209,6 +227,7 @@ def run_managed_viewer_worker(
     kp: float,
     kd: float,
     control_port: int,
+    gravity_compensation: bool,
 ) -> Sample:
     """Run MuJoCo's managed GUI inside the isolated worker process."""
     model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
@@ -224,6 +243,7 @@ def run_managed_viewer_worker(
         )
 
     pd_controller: PDController | None = None
+    gravity_switch: GravityCompensationSwitch | None = None
     if mode == "pd":
         joint_min, joint_max = model.jnt_range[joint_id]
         if not joint_min <= target_position_rad <= joint_max:
@@ -240,14 +260,22 @@ def run_managed_viewer_worker(
         )
         qpos_address = model.jnt_qposadr[joint_id]
         qvel_address = model.jnt_dofadr[joint_id]
+        gravity_switch = GravityCompensationSwitch(
+            enabled=gravity_compensation
+        )
+        mujoco.mj_forward(model, data)
 
         def pd_callback(
             callback_model: mujoco.MjModel, callback_data: mujoco.MjData
         ) -> None:
             del callback_model
+            compensation_torque = gravity_switch.torque(
+                float(callback_data.qfrc_bias[qvel_address])
+            )
             output = pd_controller.compute(
                 position_rad=float(callback_data.qpos[qpos_address]),
                 velocity_rad_s=float(callback_data.qvel[qvel_address]),
+                feedforward_torque_nm=compensation_torque,
             )
             callback_data.ctrl[actuator_id] = output.torque_nm
 
@@ -262,6 +290,7 @@ def run_managed_viewer_worker(
         actuator_id,
         port=control_port,
         pd_controller=pd_controller,
+        gravity_compensation=gravity_switch,
     )
     panel.start()
 
@@ -328,6 +357,7 @@ def run_viewer_subprocess(
     target_position_rad: float,
     kp: float,
     kd: float,
+    gravity_compensation: bool,
     open_browser: bool = True,
 ) -> int:
     """Keep terminal signal handling outside the native GUI process."""
@@ -345,31 +375,36 @@ def run_viewer_subprocess(
         )
         if not -2.094 <= target_position_rad <= 2.094:
             raise ValueError("target must be within [-120.0, 120.0] degrees")
-        print_pd_viewer_explanation(math.degrees(target_position_rad), kp, kd)
+        print_pd_viewer_explanation(
+            math.degrees(target_position_rad), kp, kd, gravity_compensation
+        )
     else:
         print_viewer_explanation(torque_nm)
     control_port = find_available_port()
     panel_url = f"http://127.0.0.1:{control_port}/"
     environment = os.environ.copy()
     environment[VIEWER_WORKER_ENV] = "1"
+    child_args = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--view",
+        "--mode",
+        mode,
+        "--torque",
+        str(torque_nm),
+        "--target-deg",
+        str(math.degrees(target_position_rad)),
+        "--kp",
+        str(kp),
+        "--kd",
+        str(kd),
+        "--control-port",
+        str(control_port),
+    ]
+    if gravity_compensation:
+        child_args.append("--gravity-compensation")
     process = subprocess.Popen(
-        [
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "--view",
-            "--mode",
-            mode,
-            "--torque",
-            str(torque_nm),
-            "--target-deg",
-            str(math.degrees(target_position_rad)),
-            "--kp",
-            str(kp),
-            "--kd",
-            str(kd),
-            "--control-port",
-            str(control_port),
-        ],
+        child_args,
         cwd=PROJECT_ROOT,
         env=environment,
         stdin=subprocess.DEVNULL,
@@ -465,6 +500,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=3.0,
         help="PD derivative gain in N·m·s/rad (default: 3)",
     )
+    parser.add_argument(
+        "--gravity-compensation",
+        action="store_true",
+        help=(
+            "add MuJoCo's model gravity/bias torque before applying the motor "
+            "limit (PD mode)"
+        ),
+    )
     parser.add_argument("--control-port", type=int, default=0, help=argparse.SUPPRESS)
     return parser
 
@@ -483,6 +526,7 @@ def main() -> int:
                 kp=args.kp,
                 kd=args.kd,
                 control_port=args.control_port,
+                gravity_compensation=args.gravity_compensation,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -508,6 +552,7 @@ def main() -> int:
                 target_position_rad=target_position_rad,
                 kp=args.kp,
                 kd=args.kd,
+                gravity_compensation=args.gravity_compensation,
                 open_browser=not args.no_browser,
             )
         except ValueError as exc:
@@ -520,6 +565,7 @@ def main() -> int:
                 kp=args.kp,
                 kd=args.kd,
                 duration_s=args.duration,
+                gravity_compensation=args.gravity_compensation,
             )
             printed_samples = evenly_spaced_samples(pd_samples, args.samples)
         except ValueError as exc:
@@ -527,11 +573,12 @@ def main() -> int:
 
         print(
             f"target_deg={args.target_deg:.3f}, Kp={args.kp:g}, Kd={args.kd:g}, "
+            f"gravity_compensation={'on' if args.gravity_compensation else 'off'}, "
             "torque_limit=[-2, 2] N·m"
         )
         print(
             "time_s  target_deg  position_deg  velocity_deg_s  "
-            "error_deg  torque_nm  limited"
+            "error_deg  pd_nm  gravity_nm  torque_nm  limited"
         )
         for sample in printed_samples:
             print(
@@ -540,6 +587,8 @@ def main() -> int:
                 f"{math.degrees(sample.position_rad):12.3f}  "
                 f"{math.degrees(sample.velocity_rad_s):14.3f}  "
                 f"{math.degrees(sample.position_error_rad):9.3f}  "
+                f"{sample.pd_torque_nm:5.3f}  "
+                f"{sample.gravity_compensation_torque_nm:10.3f}  "
                 f"{sample.torque_nm:9.3f}  "
                 f"{'yes' if sample.saturated else 'no'}"
             )

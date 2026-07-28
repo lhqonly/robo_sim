@@ -15,6 +15,8 @@ class PDOutput:
     velocity_error_rad_s: float
     proportional_torque_nm: float
     derivative_torque_nm: float
+    pd_torque_nm: float
+    feedforward_torque_nm: float
     raw_torque_nm: float
     torque_nm: float
     saturated: bool
@@ -59,8 +61,19 @@ class PDController:
         self._torque_min_nm = float(torque_min_nm)
         self._torque_max_nm = float(torque_max_nm)
 
-    def compute(self, position_rad: float, velocity_rad_s: float) -> PDOutput:
-        """Return the raw and actuator-limited torque for the current state."""
+    def compute(
+        self,
+        position_rad: float,
+        velocity_rad_s: float,
+        *,
+        feedforward_torque_nm: float = 0.0,
+    ) -> PDOutput:
+        """Return the raw and actuator-limited torque for the current state.
+
+        ``feedforward_torque_nm`` is an optional known torque, such as gravity
+        compensation. It is added to P + D before the actuator limit is
+        applied.
+        """
         with self._lock:
             kp = self._kp
             kd = self._kd
@@ -71,15 +84,21 @@ class PDController:
 
         position_error = target_position - float(position_rad)
         velocity_error = target_velocity - float(velocity_rad_s)
+        feedforward = float(feedforward_torque_nm)
+        if not math.isfinite(feedforward):
+            raise ValueError("feedforward torque must be finite")
         proportional = kp * position_error
         derivative = kd * velocity_error
-        raw_torque = proportional + derivative
+        pd_torque = proportional + derivative
+        raw_torque = pd_torque + feedforward
         torque = min(max(raw_torque, torque_min), torque_max)
         return PDOutput(
             position_error_rad=position_error,
             velocity_error_rad_s=velocity_error,
             proportional_torque_nm=proportional,
             derivative_torque_nm=derivative,
+            pd_torque_nm=pd_torque,
+            feedforward_torque_nm=feedforward,
             raw_torque_nm=raw_torque,
             torque_nm=torque,
             saturated=not math.isclose(torque, raw_torque, rel_tol=0.0, abs_tol=1e-12),

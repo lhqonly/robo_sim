@@ -8,15 +8,16 @@ from pathlib import Path
 import mujoco
 import pytest
 
-from robo_sim.ui.learning_panel import LearningPanelServer
+from robo_sim.controllers.gravity import GravityCompensationSwitch
 from robo_sim.controllers.pd import PDController
+from robo_sim.ui.learning_panel import LearningPanelServer
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = PROJECT_ROOT / "models" / "single_joint" / "single_joint.xml"
 
 
-def post_json(url: str, payload: dict[str, float]) -> dict[str, object]:
+def post_json(url: str, payload: dict[str, object]) -> dict[str, object]:
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -90,8 +91,14 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         torque_min_nm=-2.0,
         torque_max_nm=2.0,
     )
+    gravity_compensation = GravityCompensationSwitch(enabled=False)
     panel = LearningPanelServer(
-        model, data, joint_id, actuator_id, pd_controller=controller
+        model,
+        data,
+        joint_id,
+        actuator_id,
+        pd_controller=controller,
+        gravity_compensation=gravity_compensation,
     )
     panel.start()
 
@@ -105,6 +112,8 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert 'id="angleChart"' in html
         assert "为什么停在这里，没有到目标" in html
         assert "PD 是 PID 里的 P + D" in html
+        assert "重力补偿" in html
+        assert 'id="toggleGravityCompensation"' in html
         assert "请在 MuJoCo Viewer 左侧 Simulation 区域点击 Run" in html
         assert "[hidden] { display: none !important; }" in html
         assert '<section id="watchControl"' in html
@@ -132,6 +141,25 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         )
         assert "derivative_torque_nm" in state
         assert "bias_torque_nm" in state
+        assert state["gravity_compensation_enabled"] is False
+        assert state["gravity_compensation_torque_nm"] == pytest.approx(0.0)
+
+        result = post_json(
+            panel.url + "api/gravity-compensation", {"enabled": True}
+        )
+        assert result["gravity_compensation_enabled"] is True
+        assert gravity_compensation.enabled is True
+
+        with urllib.request.urlopen(panel.url + "api/state", timeout=2) as response:
+            compensated_state = json.load(response)
+        assert compensated_state["gravity_compensation_enabled"] is True
+        assert compensated_state["gravity_compensation_torque_nm"] == pytest.approx(
+            compensated_state["bias_torque_nm"]
+        )
+        assert compensated_state["raw_torque_nm"] == pytest.approx(
+            compensated_state["pd_torque_nm"]
+            + compensated_state["gravity_compensation_torque_nm"]
+        )
 
         with pytest.raises(urllib.error.HTTPError) as error:
             post_json(panel.url + "api/torque", {"value": 1.0})

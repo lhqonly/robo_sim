@@ -45,6 +45,28 @@ def test_pd_controller_clips_torque_and_allows_live_tuning() -> None:
     assert settings["target_position_rad"] == pytest.approx(0.25)
 
 
+def test_pd_controller_adds_feedforward_before_applying_torque_limit() -> None:
+    controller = PDController(
+        kp=10.0,
+        kd=0.0,
+        target_position_rad=0.08,
+        torque_min_nm=-2.0,
+        torque_max_nm=2.0,
+    )
+
+    output = controller.compute(
+        position_rad=0.0,
+        velocity_rad_s=0.0,
+        feedforward_torque_nm=1.5,
+    )
+
+    assert output.pd_torque_nm == pytest.approx(0.8)
+    assert output.feedforward_torque_nm == pytest.approx(1.5)
+    assert output.raw_torque_nm == pytest.approx(2.3)
+    assert output.torque_nm == pytest.approx(2.0)
+    assert output.saturated is True
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [

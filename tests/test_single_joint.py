@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -99,3 +100,47 @@ def test_pd_experiment_tracks_target_headless() -> None:
     assert "target_deg" in completed.stdout
     assert "Final tracking error" in completed.stdout
     assert "Plot saved:" not in completed.stdout
+
+
+def test_gravity_compensation_removes_most_pd_steady_state_error() -> None:
+    common_args = [
+        sys.executable,
+        str(RUN_PATH),
+        "--mode",
+        "pd",
+        "--target-deg",
+        "30",
+        "--kp",
+        "5",
+        "--kd",
+        "3",
+        "--duration",
+        "8",
+        "--samples",
+        "2",
+    ]
+    pure_pd = subprocess.run(
+        common_args,
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    compensated = subprocess.run(
+        [*common_args, "--gravity-compensation"],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert pure_pd.returncode == 0, pure_pd.stderr
+    assert compensated.returncode == 0, compensated.stderr
+    pattern = r"Final tracking error: [^/]+/ ([+-]?[0-9.]+) deg"
+    pure_error = abs(float(re.search(pattern, pure_pd.stdout).group(1)))
+    compensated_error = abs(
+        float(re.search(pattern, compensated.stdout).group(1))
+    )
+    assert pure_error > 5.0
+    assert compensated_error < 0.1
+    assert "gravity_compensation=on" in compensated.stdout
