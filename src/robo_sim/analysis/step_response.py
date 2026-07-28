@@ -53,13 +53,10 @@ class StepResponseAnalyzer:
             if not self._samples:
                 raise RuntimeError("step response measurement has not started")
             if time_s + self._TIME_EPSILON_S < self._samples[-1][0]:
-                # MuJoCo resets simulation time to zero when the native Reset
-                # button is used. Treat that as a fresh response experiment.
-                self._start_locked(
-                    float(time_s),
-                    float(position_rad),
-                    self._target_position_rad,
-                )
+                # Managed Viewer samples can briefly appear out of order.
+                # Never let one stale sample replace an explicit experiment
+                # with an accidental "target -> target" measurement. New
+                # experiments are started by the panel/controller commands.
                 return
             if (
                 math.isclose(

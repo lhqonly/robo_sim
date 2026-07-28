@@ -95,3 +95,21 @@ def test_step_response_reports_no_step_and_rejects_invalid_criteria() -> None:
         analyzer.configure(tolerance_rad=0.0, hold_time_s=0.5)
     with pytest.raises(ValueError, match="hold"):
         analyzer.configure(tolerance_rad=0.1, hold_time_s=0.0)
+
+
+def test_backward_time_sample_does_not_restart_explicit_measurement() -> None:
+    analyzer = StepResponseAnalyzer(tolerance_rad=0.05, hold_time_s=0.2)
+    analyzer.start(time_s=0.0, position_rad=0.0, target_position_rad=1.0)
+    measurement_id = analyzer.snapshot()["measurement_id"]
+
+    analyzer.observe(time_s=0.5, position_rad=0.5)
+    # Reproduce an out-of-order managed Viewer sample arriving after a newer
+    # one. Its position is already at the target, which used to overwrite the
+    # valid 0 -> 1 experiment with an invalid 1 -> 1 experiment.
+    analyzer.observe(time_s=0.4, position_rad=1.0)
+
+    result = analyzer.snapshot()
+    assert result["measurement_id"] == measurement_id
+    assert result["initial_position_rad"] == pytest.approx(0.0)
+    assert result["target_position_rad"] == pytest.approx(1.0)
+    assert result["status"] == "tracking"
