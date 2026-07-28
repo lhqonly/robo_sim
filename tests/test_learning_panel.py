@@ -79,6 +79,73 @@ def test_learning_panel_serves_chinese_watch_fields_and_exact_torque() -> None:
         panel.close()
 
 
+def test_reset_measurement_uses_model_initial_position(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Viewer activity after reset must not turn a 0° step into 45° → 45°."""
+    model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
+    data = mujoco.MjData(model)
+    joint_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_JOINT, "hinge"
+    )
+    actuator_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_ACTUATOR, "joint_motor"
+    )
+    target_rad = math.radians(45.0)
+    controller = PDController(
+        kp=5.0,
+        kd=3.0,
+        target_position_rad=target_rad,
+        torque_min_nm=-2.0,
+        torque_max_nm=2.0,
+    )
+    analyzer = StepResponseAnalyzer(
+        tolerance_rad=math.radians(1.0),
+        hold_time_s=0.5,
+    )
+    analyzer.start(
+        time_s=0.0,
+        position_rad=target_rad,
+        target_position_rad=target_rad,
+    )
+    panel = LearningPanelServer(
+        model,
+        data,
+        joint_id,
+        actuator_id,
+        pd_controller=controller,
+        gravity_compensation=GravityCompensationSwitch(enabled=True),
+        step_response_analyzer=analyzer,
+    )
+    original_reset_data = mujoco.mj_resetData
+    qpos_address = model.jnt_qposadr[joint_id]
+
+    def reset_then_simulate_viewer_activity(
+        reset_model: mujoco.MjModel, reset_data: mujoco.MjData
+    ) -> None:
+        original_reset_data(reset_model, reset_data)
+        if reset_data is data:
+            # Reproduce the managed Viewer changing shared data before the
+            # HTTP thread can infer the experiment's initial position.
+            reset_data.qpos[qpos_address] = target_rad
+
+    monkeypatch.setattr(
+        mujoco, "mj_resetData", reset_then_simulate_viewer_activity
+    )
+    panel.start()
+    try:
+        panel.reset()
+        result = analyzer.snapshot()
+        assert data.qpos[qpos_address] == pytest.approx(target_rad)
+        assert result["initial_position_rad"] == pytest.approx(
+            model.qpos0[qpos_address]
+        )
+        assert result["target_position_rad"] == pytest.approx(target_rad)
+        assert result["status"] == "tracking"
+    finally:
+        panel.close()
+
+
 def test_learning_panel_supports_exact_pd_tuning() -> None:
     model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
     data = mujoco.MjData(model)

@@ -182,6 +182,9 @@ PANEL_HTML = """<!doctype html>
       角度进入允许误差范围，并连续保持指定时间才算稳定；中途跑出范围就重新计算。
     </div>
     <div id="responseStatus" class="status">正在等待响应实验……</div>
+    <div id="responseExperiment" class="muted" style="margin-top:8px">
+      本轮实验起点与目标：--
+    </div>
     <div class="metrics-grid" style="margin-top:12px">
       <div class="metric">本次已经运行<strong id="responseElapsed">--</strong></div>
       <div class="metric">首次进入允许误差<strong id="firstArrivalTime">--</strong></div>
@@ -230,6 +233,7 @@ let latest = null;
 let responseHistory = [];
 let recording = true;
 let lastRecordedTime = null;
+let lastMeasurementId = null;
 let lastAdvanceWallTime = Date.now();
 const $ = (id) => document.getElementById(id);
 
@@ -297,6 +301,13 @@ function renderState(state) {
     if (document.activeElement !== $('kpInput')) $('kpInput').value = format(state.kp, 2);
     if (document.activeElement !== $('kdInput')) $('kdInput').value = format(state.kd, 2);
     const response = state.step_response;
+    if (
+      lastMeasurementId !== null &&
+      response.measurement_id !== lastMeasurementId
+    ) {
+      clearResponseHistory();
+    }
+    lastMeasurementId = response.measurement_id;
     if (document.activeElement !== $('settlingToleranceInput')) {
       $('settlingToleranceInput').value = format(response.tolerance_deg, 2);
     }
@@ -311,6 +322,10 @@ function renderState(state) {
     $('overshoot').textContent =
       `${format(response.overshoot_deg, 2)}° / ${format(response.overshoot_percent, 1)}%`;
     $('responseCurrentError').textContent = `${format(response.current_error_deg, 2)}°`;
+    $('responseExperiment').textContent =
+      `本轮 #${response.measurement_id}：` +
+      `${format(response.initial_position_deg, 2)}° → ` +
+      `${format(response.target_position_deg, 2)}°`;
     if (response.status === 'settled') {
       $('responseStatus').textContent =
         `已确认稳定：误差保持在 ±${format(response.tolerance_deg, 2)}° 内至少 ` +
@@ -855,17 +870,19 @@ class LearningPanelServer:
         return {"gravity_compensation_enabled": compensation_enabled}
 
     def reset(self) -> None:
+        qpos_address = self.model.jnt_qposadr[self.joint_id]
+        # The HTTP handler and MuJoCo's managed Viewer run on different
+        # threads. Shared MjData can change again immediately after reset, so
+        # use the model's immutable reset pose as this experiment's true start.
+        initial_position_rad = float(self.model.qpos0[qpos_address])
         with self._lock:
             mujoco.mj_resetData(self.model, self.data)
             self.data.ctrl[self.actuator_id] = 0.0
-            time_s = float(self.data.time)
-            qpos_address = self.model.jnt_qposadr[self.joint_id]
-            position_rad = float(self.data.qpos[qpos_address])
         if self.pd_controller is not None and self.step_response_analyzer is not None:
             target_rad = self.pd_controller.settings()["target_position_rad"]
             self.step_response_analyzer.start(
-                time_s=time_s,
-                position_rad=position_rad,
+                time_s=0.0,
+                position_rad=initial_position_rad,
                 target_position_rad=target_rad,
             )
 
