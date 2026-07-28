@@ -133,6 +133,8 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert "响应时间测量" in html
         assert 'id="settlingTime"' in html
         assert "连续保持" in html
+        assert "应用参数并从 0° 开始测试" in html
+        assert 'class="experiment-grid"' in html
         assert "请在 MuJoCo Viewer 左侧 Simulation 区域点击 Run" in html
         assert "[hidden] { display: none !important; }" in html
         assert '<section id="watchControl"' in html
@@ -177,6 +179,18 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert response["tolerance_deg"] == pytest.approx(1.0)
         assert response["hold_time_s"] == pytest.approx(0.5)
         assert response["target_position_deg"] == pytest.approx(25.0)
+        measurement_id_after_target_change = response["measurement_id"]
+
+        post_json(
+            panel.url + "api/pd",
+            {"target_deg": 25.0, "kp": 30.0, "kd": 3.0},
+        )
+        with urllib.request.urlopen(panel.url + "api/state", timeout=2) as response:
+            same_target_state = json.load(response)
+        assert (
+            same_target_state["step_response"]["measurement_id"]
+            == measurement_id_after_target_change
+        )
 
         criteria = post_json(
             panel.url + "api/response-criteria",
@@ -194,6 +208,10 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         with urllib.request.urlopen(panel.url + "api/state", timeout=2) as response:
             compensated_state = json.load(response)
         assert compensated_state["gravity_compensation_enabled"] is True
+        assert (
+            compensated_state["step_response"]["measurement_id"]
+            == measurement_id_after_target_change
+        )
         assert compensated_state["gravity_compensation_torque_nm"] == pytest.approx(
             compensated_state["bias_torque_nm"]
         )
@@ -213,6 +231,30 @@ def test_learning_panel_supports_exact_pd_tuning() -> None:
         assert reset_state["step_response"]["target_position_deg"] == pytest.approx(
             25.0
         )
+
+        response_test = post_json(
+            panel.url + "api/run-response-test",
+            {
+                "target_deg": 45.0,
+                "kp": 10.0,
+                "kd": 3.0,
+                "tolerance_deg": 0.75,
+                "hold_time_s": 0.4,
+            },
+        )
+        assert response_test["target_position_deg"] == pytest.approx(45.0)
+        assert response_test["tolerance_deg"] == pytest.approx(0.75)
+        assert response_test["hold_time_s"] == pytest.approx(0.4)
+        assert data.qpos[model.jnt_qposadr[joint_id]] == pytest.approx(0.0)
+        with urllib.request.urlopen(panel.url + "api/state", timeout=2) as response:
+            restarted_state = json.load(response)
+        assert restarted_state["step_response"]["initial_position_deg"] == pytest.approx(
+            0.0
+        )
+        assert restarted_state["step_response"]["target_position_deg"] == pytest.approx(
+            45.0
+        )
+        assert restarted_state["step_response"]["status"] == "tracking"
 
         with pytest.raises(urllib.error.HTTPError) as error:
             post_json(panel.url + "api/torque", {"value": 1.0})

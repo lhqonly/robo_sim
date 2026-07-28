@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,7 +25,7 @@ PANEL_HTML = """<!doctype html>
   <style>
     :root { color-scheme: dark; font-family: system-ui, "Microsoft YaHei", sans-serif; }
     body { margin: 0; background: #111827; color: #e5e7eb; }
-    main { max-width: 980px; margin: auto; padding: 24px; }
+    main { max-width: 1280px; margin: auto; padding: 24px; }
     [hidden] { display: none !important; }
     h1 { margin: 0 0 6px; font-size: 24px; }
     .muted { color: #9ca3af; }
@@ -49,6 +50,16 @@ PANEL_HTML = """<!doctype html>
                border-left: 4px solid #f59e0b; border-radius: 6px; }
     .chart-block { margin-top: 16px; padding: 12px; background: #111827;
                    border-radius: 8px; }
+    .experiment-grid { display: grid; grid-template-columns: minmax(300px, 0.7fr)
+                      minmax(520px, 1.3fr); gap: 16px; align-items: start; }
+    .experiment-controls { margin-top: 16px; padding: 14px; background: #111827;
+                           border-radius: 8px; }
+    .experiment-controls h3 { margin: 4px 0 12px; }
+    .experiment-controls label { margin-top: 10px; }
+    .angle-chart-block { margin-top: 16px; }
+    .angle-chart-block canvas { height: 360px; }
+    .metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+                    gap: 12px; }
     .chart-title { display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
                    margin-bottom: 8px; font-weight: 650; }
     .legend { font-size: 13px; font-weight: 400; color: #d1d5db; }
@@ -57,6 +68,10 @@ PANEL_HTML = """<!doctype html>
                       vertical-align: middle; }
     canvas { display: block; width: 100%; height: 220px; }
     code { color: #fde68a; }
+    @media (max-width: 900px) {
+      .experiment-grid, .metrics-grid { grid-template-columns: 1fr; }
+      .angle-chart-block canvas { height: 260px; }
+    }
     @media (max-width: 580px) { .grid { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -76,29 +91,6 @@ PANEL_HTML = """<!doctype html>
     </select>
     <div id="watchValue" class="watch-value">--</div>
     <div id="watchDescription" class="description"></div>
-  </section>
-
-  <section id="pdControl" class="card" hidden>
-    <h2 style="margin-top:0">PD 闭环参数</h2>
-    <div class="grid">
-      <div>
-        <label for="targetInput">目标角度（degree / °）</label>
-        <input id="targetInput" type="number" min="-120" max="120" step="0.1" />
-      </div>
-      <div>
-        <label for="kpInput">比例增益 Kp（N·m/rad）</label>
-        <input id="kpInput" type="number" min="0" max="200" step="0.1" />
-      </div>
-      <div>
-        <label for="kdInput">微分增益 Kd（N·m·s/rad）</label>
-        <input id="kdInput" type="number" min="0" max="50" step="0.1" />
-      </div>
-    </div>
-    <button id="applyPd" class="primary">应用目标与增益</button>
-    <button id="toggleGravityCompensation">重力补偿：关闭（点击开启）</button>
-    <div class="muted">PD 是 PID 里的 P + D：P 看“还差多远”，D 看“现在动得多快”并负责刹车。I 会累积长期误差，后续单独学习。</div>
-    <div class="muted">重力补偿不是 I：它让模型先用一部分力托住杆的重量，再由 PD 负责对准目标和刹车。</div>
-    <div id="pdStatus" class="status"></div>
   </section>
 
   <section id="torqueControl" class="card" hidden>
@@ -141,58 +133,69 @@ PANEL_HTML = """<!doctype html>
     </div>
   </section>
 
-  <section id="responseMetricsCard" class="card" hidden>
-    <h2 style="margin-top:0">响应时间测量</h2>
-    <div class="insight">
-      从应用新目标开始计时。角度进入允许误差范围，并连续保持指定时间，才算真正稳定；
-      中途跑出范围就重新计算稳定时间。
-    </div>
-    <div class="grid" style="margin-top:12px">
-      <div>
+  <section id="responseCard" class="card" hidden>
+    <h2 style="margin:0">PD 调参与实时响应曲线</h2>
+    <div class="muted">参数、稳定判据和角度曲线放在同一区域，方便一边调整一边观察。</div>
+
+    <div class="experiment-grid">
+      <div class="experiment-controls">
+        <h3>PD 闭环参数</h3>
+        <label for="targetInput">目标角度（degree / °）</label>
+        <input id="targetInput" type="number" min="-120" max="120" step="0.1" />
+        <label for="kpInput">比例增益 Kp（N·m/rad）</label>
+        <input id="kpInput" type="number" min="0" max="200" step="0.1" />
+        <label for="kdInput">微分增益 Kd（N·m·s/rad）</label>
+        <input id="kdInput" type="number" min="0" max="50" step="0.1" />
+
+        <button id="applyPd" class="primary">应用参数并从 0° 开始测试</button>
+        <button id="applyPdLive">只应用，不重置姿态</button>
+        <button id="toggleGravityCompensation">重力补偿：关闭（点击开启）</button>
+        <div id="pdStatus" class="status"></div>
+
+        <h3>稳定判定标准</h3>
         <label for="settlingToleranceInput">允许角度误差（± degree / °）</label>
         <input id="settlingToleranceInput" type="number" min="0.01" max="30" step="0.1" />
-      </div>
-      <div>
         <label for="settlingHoldInput">需要连续保持（秒）</label>
         <input id="settlingHoldInput" type="number" min="0.02" max="10" step="0.1" />
+        <button id="applyResponseCriteria">应用判定标准</button>
+        <div class="muted">
+          PD 是 PID 里的 P + D：P 看“还差多远”，D 看“动得多快”并负责刹车；
+          重力补偿先托住杆的重量。
+        </div>
+      </div>
+
+      <div class="chart-block angle-chart-block">
+        <div class="chart-title">角度响应
+          <span class="legend" style="--legend-color:#34d399">目标角度</span>
+          <span class="legend" style="--legend-color:#60a5fa">实际角度</span>
+          <span class="legend" style="--legend-color:#fbbf24">稳定允许范围</span>
+        </div>
+        <canvas id="angleChart"></canvas>
+        <div id="curveStatus" class="status">正在等待仿真数据……</div>
+        <button id="toggleRecording">暂停记录</button>
+        <button id="clearCharts">清空曲线</button>
       </div>
     </div>
-    <button id="applyResponseCriteria">应用判定标准</button>
+
+    <h3>响应时间测量</h3>
+    <div class="insight">
+      角度进入允许误差范围，并连续保持指定时间才算稳定；中途跑出范围就重新计算。
+    </div>
     <div id="responseStatus" class="status">正在等待响应实验……</div>
-    <div class="grid" style="margin-top:12px">
+    <div class="metrics-grid" style="margin-top:12px">
       <div class="metric">本次已经运行<strong id="responseElapsed">--</strong></div>
       <div class="metric">首次进入允许误差<strong id="firstArrivalTime">--</strong></div>
       <div class="metric">上升时间（10% → 90%）<strong id="riseTime">--</strong></div>
       <div class="metric">稳定时间 Ts<strong id="settlingTime">--</strong></div>
-      <div class="metric">确认稳定耗时（含持续观察）<strong id="settlingConfirmedTime">--</strong></div>
+      <div class="metric">确认稳定耗时<strong id="settlingConfirmedTime">--</strong></div>
       <div class="metric">最大超调<strong id="overshoot">--</strong></div>
       <div class="metric">当前跟踪误差<strong id="responseCurrentError">--</strong></div>
     </div>
     <div class="muted" style="margin-top:10px">
-      调参对比方法：修改 Kp/Kd → 应用 → 点击“重新实验：回到 0° 并计时”。
-      稳定时间越短不一定越好，还要同时观察超调、振荡、最大力矩和真实人体舒适性。
+      “尚未达到”表示当前这轮还没有满足定义，不代表肉眼看到的位置一定不对。
+      注意：这里只测仿真时间，不包含真实传感器、通信、电机驱动和人体反作用延迟。
     </div>
-    <div class="muted">
-      注意：这里测的是仿真时间，不包含真实传感器、滤波、通信、电机驱动和人体反作用延迟，
-      不能直接当作真实外骨骼的安全结论。
-    </div>
-  </section>
 
-  <section id="responseCard" class="card" hidden>
-    <h2 style="margin:0">实时响应曲线</h2>
-    <div class="muted">记录最近 30 秒。修改目标时，绿色虚线会形成阶跃，可直接观察实际角度如何追踪。</div>
-    <div id="curveStatus" class="status">正在等待仿真数据……</div>
-    <button id="toggleRecording">暂停记录</button>
-    <button id="clearCharts">清空曲线</button>
-
-    <div class="chart-block">
-      <div class="chart-title">角度响应
-        <span class="legend" style="--legend-color:#34d399">目标角度</span>
-        <span class="legend" style="--legend-color:#60a5fa">实际角度</span>
-        <span class="legend" style="--legend-color:#fbbf24">稳定允许范围</span>
-      </div>
-      <canvas id="angleChart"></canvas>
-    </div>
     <div class="chart-block">
       <div class="chart-title">角速度
         <span class="legend" style="--legend-color:#fbbf24">实际角速度</span>
@@ -250,19 +253,21 @@ function renderWatch() {
 function renderState(state) {
   latest = state;
   const pdMode = state.mode === 'pd';
+  if (pdMode && $('watchControl').nextElementSibling !== $('responseCard')) {
+    // Keep the tuning controls and charts near the top in feedback mode.
+    $('watchControl').insertAdjacentElement('afterend', $('responseCard'));
+  }
   $('modeBadge').textContent = pdMode
     ? (state.gravity_compensation_enabled
       ? 'Phase 2.5：PD + 重力补偿（先托住重量，再纠正误差）'
       : 'Phase 2：纯 PD 闭环控制（根据误差实时改变扭矩）')
     : 'Phase 1：恒扭矩开环控制';
   $('torqueControl').hidden = pdMode;
-  $('pdControl').hidden = !pdMode;
   $('errorMetric').hidden = !pdMode;
   $('rawTorqueMetric').hidden = !pdMode;
   $('pdTorqueMetric').hidden = !pdMode;
   $('gravityTorqueMetric').hidden = !pdMode;
   $('pdInsightCard').hidden = !pdMode;
-  $('responseMetricsCard').hidden = !pdMode;
   $('responseCard').hidden = !pdMode;
   $('reset').textContent = pdMode
     ? '重新实验：回到 0° 并计时'
@@ -316,7 +321,8 @@ function renderState(state) {
         `${format(response.stable_for_s, 3)} / ${format(response.hold_time_s, 3)} s；暂未宣布稳定。`;
     } else if (response.status === 'no_step') {
       $('responseStatus').textContent =
-        '本次起点和目标相同，没有形成角度阶跃。请点击“重新实验”或设置一个新目标。';
+        '这轮计时从目标位置开始，没有发生角度变化，所以无法计算上升时间。' +
+        '请点击左侧蓝色“应用参数并从 0° 开始测试”。';
     } else {
       $('responseStatus').textContent =
         `正在追踪目标：已运行 ${format(response.elapsed_time_s, 3)} s，` +
@@ -390,7 +396,7 @@ function appendResponsePoint(state) {
 
 function drawChart(canvas, series, options={}) {
   const width = Math.max(canvas.clientWidth, 320);
-  const height = 220;
+  const height = Math.max(canvas.clientHeight, 220);
   const ratio = window.devicePixelRatio || 1;
   canvas.width = Math.round(width * ratio);
   canvas.height = Math.round(height * ratio);
@@ -509,7 +515,25 @@ async function setPd() {
       kp: Number($('kpInput').value),
       kd: Number($('kdInput').value)
     });
-    $('pdStatus').textContent = `已应用：目标 ${format(result.target_position_deg, 2)}°，Kp=${format(result.kp, 2)}，Kd=${format(result.kd, 2)}`;
+    $('pdStatus').textContent =
+      `已应用到当前姿态：目标 ${format(result.target_position_deg, 2)}°，` +
+      `Kp=${format(result.kp, 2)}，Kd=${format(result.kd, 2)}。`;
+    await refresh();
+  } catch (error) { $('pdStatus').textContent = error.message; }
+}
+async function runResponseTest() {
+  try {
+    const result = await post('/api/run-response-test', {
+      target_deg: Number($('targetInput').value),
+      kp: Number($('kpInput').value),
+      kd: Number($('kdInput').value),
+      tolerance_deg: Number($('settlingToleranceInput').value),
+      hold_time_s: Number($('settlingHoldInput').value)
+    });
+    clearResponseHistory();
+    $('pdStatus').textContent =
+      `新测试已开始：0° → ${format(result.target_position_deg, 2)}°，` +
+      `Kp=${format(result.kp, 2)}，Kd=${format(result.kd, 2)}。`;
     await refresh();
   } catch (error) { $('pdStatus').textContent = error.message; }
 }
@@ -540,10 +564,11 @@ $('applyTorque').addEventListener('click', () => setTorque($('torqueInput').valu
 $('torqueInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') setTorque(event.target.value); });
 $('torqueSlider').addEventListener('change', (event) => setTorque(event.target.value));
 document.querySelectorAll('[data-torque]').forEach((button) => button.addEventListener('click', () => setTorque(button.dataset.torque)));
-$('applyPd').addEventListener('click', setPd);
+$('applyPd').addEventListener('click', runResponseTest);
+$('applyPdLive').addEventListener('click', setPd);
 $('toggleGravityCompensation').addEventListener('click', toggleGravityCompensation);
 $('applyResponseCriteria').addEventListener('click', setResponseCriteria);
-[$('targetInput'), $('kpInput'), $('kdInput')].forEach((input) => input.addEventListener('keydown', (event) => { if (event.key === 'Enter') setPd(); }));
+[$('targetInput'), $('kpInput'), $('kdInput')].forEach((input) => input.addEventListener('keydown', (event) => { if (event.key === 'Enter') runResponseTest(); }));
 [$('settlingToleranceInput'), $('settlingHoldInput')].forEach((input) => input.addEventListener('keydown', (event) => { if (event.key === 'Enter') setResponseCriteria(); }));
 $('toggleRecording').addEventListener('click', () => {
   recording = !recording;
@@ -747,6 +772,9 @@ class LearningPanelServer:
     def set_pd(self, target_deg: float, kp: float, kd: float) -> dict[str, float]:
         if self.pd_controller is None:
             raise ValueError("当前不是 PD 控制模式")
+        previous_target_rad = self.pd_controller.settings()[
+            "target_position_rad"
+        ]
         target_rad = target_deg * 3.141592653589793 / 180.0
         joint_min, joint_max = self.model.jnt_range[self.joint_id]
         if not joint_min <= target_rad <= joint_max:
@@ -761,15 +789,21 @@ class LearningPanelServer:
         self.pd_controller.update(
             kp=kp, kd=kd, target_position_rad=target_rad
         )
-        qpos_address = self.model.jnt_qposadr[self.joint_id]
-        with self._lock:
-            time_s = float(self.data.time)
-            position_rad = float(self.data.qpos[qpos_address])
-        self.step_response_analyzer.start(
-            time_s=time_s,
-            position_rad=position_rad,
-            target_position_rad=target_rad,
-        )
+        if not math.isclose(
+            target_rad,
+            previous_target_rad,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            qpos_address = self.model.jnt_qposadr[self.joint_id]
+            with self._lock:
+                time_s = float(self.data.time)
+                position_rad = float(self.data.qpos[qpos_address])
+            self.step_response_analyzer.start(
+                time_s=time_s,
+                position_rad=position_rad,
+                target_position_rad=target_rad,
+            )
         settings = self.pd_controller.settings()
         return {
             "target_position_rad": settings["target_position_rad"],
@@ -779,6 +813,21 @@ class LearningPanelServer:
             "kp": settings["kp"],
             "kd": settings["kd"],
         }
+
+    def run_response_test(
+        self,
+        *,
+        target_deg: float,
+        kp: float,
+        kd: float,
+        tolerance_deg: float,
+        hold_time_s: float,
+    ) -> dict[str, float]:
+        """Apply settings, reset to zero, and start one comparable test."""
+        settings = self.set_pd(target_deg, kp, kd)
+        criteria = self.set_response_criteria(tolerance_deg, hold_time_s)
+        self.reset()
+        return {**settings, **criteria}
 
     def set_response_criteria(
         self, tolerance_deg: float, hold_time_s: float
@@ -803,17 +852,6 @@ class LearningPanelServer:
         if self.pd_controller is None or self.gravity_compensation is None:
             raise ValueError("当前不是 PD 控制模式")
         compensation_enabled = self.gravity_compensation.set_enabled(enabled)
-        if self.step_response_analyzer is not None:
-            qpos_address = self.model.jnt_qposadr[self.joint_id]
-            with self._lock:
-                time_s = float(self.data.time)
-                position_rad = float(self.data.qpos[qpos_address])
-            target_rad = self.pd_controller.settings()["target_position_rad"]
-            self.step_response_analyzer.start(
-                time_s=time_s,
-                position_rad=position_rad,
-                target_position_rad=target_rad,
-            )
         return {"gravity_compensation_enabled": compensation_enabled}
 
     def reset(self) -> None:
@@ -868,6 +906,16 @@ class LearningPanelServer:
                             panel.set_response_criteria(
                                 float(body["tolerance_deg"]),
                                 float(body["hold_time_s"]),
+                            )
+                        )
+                    elif self.path == "/api/run-response-test":
+                        self._send_json(
+                            panel.run_response_test(
+                                target_deg=float(body["target_deg"]),
+                                kp=float(body["kp"]),
+                                kd=float(body["kd"]),
+                                tolerance_deg=float(body["tolerance_deg"]),
+                                hold_time_s=float(body["hold_time_s"]),
                             )
                         )
                     elif self.path == "/api/reset":
