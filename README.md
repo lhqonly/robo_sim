@@ -6,7 +6,7 @@ LinkJoin Robo SIM 是一个面向初学者的学习型工程：用仿真逐步�
 
 ## 当前状态
 
-Phase 1（单关节恒力矩）、Phase 2（PD 闭环控制）、Phase 2.5（重力补偿）和 Phase 2.6（响应时间）已完成：可以在原生 MuJoCo Viewer + 中文面板中观察反馈控制，实时开关重力补偿，并测量首次到达、上升时间、稳定时间和最大超调。下一阶段是把当前杆明确映射为膝关节/小腿摆杆。
+Phase 1～3 已完成：可以在原生 MuJoCo Viewer + 中文面板中观察单关节反馈控制、重力补偿和量化调参指标，并用独立膝关节摆杆实验对比“小腿被重力拉下”与“电机持续托住重量”。下一阶段进入髋、膝、踝组成的 2D 单腿。
 
 权威路线图见 [`docs/work_plan.md`](docs/work_plan.md)，完成记录见 [`docs/progress_log.md`](docs/progress_log.md)。
 
@@ -47,6 +47,15 @@ python experiments/001_single_joint_pd/run.py \
 ```
 
 `--view` 会同时打开官方 3D Viewer 和中文学习控制面板。PD 模式下，参数、稳定判据、角度曲线和响应指标集中在同一个调参区域；蓝色按钮会应用参数并自动从 `0°` 开始一轮可比较测试。响应时间默认以 `±1°` 且连续保持 `0.5 s` 判定稳定，显示首次到达、上升时间、稳定时间和超调。动态曲线还会拆分 PD、重力补偿和实际总力矩。`--mode torque` 仍保留精确扭矩输入、滑块和预设按钮。
+
+运行 Phase 3 膝关节被动下落实验：
+
+```bash
+python experiments/002_pendulum_balance/run.py \
+  --mode passive --initial-deg 45 --view
+```
+
+将 `passive` 改成 `hold`，可以观察膝电机实时补上约 `6.416 N·m` 重力矩并保持 45°。
 
 ## 目录导览
 

@@ -49,6 +49,9 @@ def test_learning_panel_serves_chinese_watch_fields_and_exact_torque() -> None:
         assert "format(latest.qpos_deg, 2)" in html
         assert "degree/s" in html
         assert "joint_motor 精确扭矩输入" in html
+        assert 'id="kneeLessonCard"' in html
+        assert "尚需人体承担（概念量）" in html
+        assert "所需总力矩 = 人体力矩 + 外骨骼力矩" in html
 
         result = post_json(panel.url + "api/torque", {"value": 1.234})
         assert result["ctrl"] == pytest.approx(1.234)
@@ -82,7 +85,7 @@ def test_learning_panel_serves_chinese_watch_fields_and_exact_torque() -> None:
 def test_reset_measurement_uses_model_initial_position(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Viewer activity after reset must not turn a 0° step into 45° → 45°."""
+    """Reset must restore the model pose despite concurrent Viewer activity."""
     model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
     data = mujoco.MjData(model)
     joint_id = mujoco.mj_name2id(
@@ -136,7 +139,9 @@ def test_reset_measurement_uses_model_initial_position(
     try:
         panel.reset()
         result = analyzer.snapshot()
-        assert data.qpos[qpos_address] == pytest.approx(target_rad)
+        assert data.qpos[qpos_address] == pytest.approx(
+            model.qpos0[qpos_address]
+        )
         assert result["initial_position_rad"] == pytest.approx(
             model.qpos0[qpos_address]
         )

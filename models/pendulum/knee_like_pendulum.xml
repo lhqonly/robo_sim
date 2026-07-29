@@ -1,0 +1,41 @@
+<mujoco model="knee_like_pendulum">
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="RK4"/>
+
+  <visual>
+    <headlight ambient="0.4 0.4 0.4" diffuse="0.8 0.8 0.8"/>
+  </visual>
+
+  <worldbody>
+    <geom name="floor" type="plane" size="2 2 0.1"
+          rgba="0.18 0.20 0.24 1"/>
+
+    <!-- The thigh has no joint, so it is fixed to the world for this lesson. -->
+    <body name="fixed_thigh" pos="0 0 0.72">
+      <geom name="thigh_geom" type="capsule"
+            fromto="0 0 0 0 0 0.42" size="0.06" mass="0"
+            contype="0" conaffinity="0" rgba="0.25 0.45 0.80 1"/>
+      <geom name="knee_hub" type="cylinder" size="0.08 0.07"
+            euler="1.5708 0 0" mass="0" contype="0" conaffinity="0"
+            rgba="0.95 0.75 0.10 1"/>
+
+      <body name="shank_and_foot">
+        <!-- 0 deg hangs straight down; positive angle flexes the knee. -->
+        <joint name="knee_hinge" type="hinge" axis="0 1 0"
+               range="-0.087266 2.094395" damping="0.30" armature="0.03"/>
+        <geom name="shank_geom" type="capsule"
+              fromto="0 0 0 0 0 -0.43" size="0.045" mass="3.0"
+              contype="0" conaffinity="0" rgba="0.88 0.35 0.18 1"/>
+        <geom name="foot_geom" type="box" pos="0.10 0 -0.45"
+              size="0.14 0.055 0.035" mass="0.8"
+              contype="0" conaffinity="0" rgba="0.92 0.50 0.20 1"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- gear=1 means one control unit equals one N·m at the knee. -->
+  <actuator>
+    <motor name="knee_motor" joint="knee_hinge" gear="1"
+           ctrllimited="true" ctrlrange="-10 10"/>
+  </actuator>
+</mujoco>

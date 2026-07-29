@@ -77,8 +77,8 @@ PANEL_HTML = """<!doctype html>
 </head>
 <body>
 <main>
-  <h1>LinkJoin 单关节学习面板</h1>
-  <div class="muted">这是 MuJoCo Viewer 的中文辅助面板；只监听本机 127.0.0.1。</div>
+  <h1 id="panelTitle">LinkJoin 单关节学习面板</h1>
+  <div id="panelSubtitle" class="muted">这是 MuJoCo Viewer 的中文辅助面板；只监听本机 127.0.0.1。</div>
   <div id="modeBadge" class="status">正在读取控制模式……</div>
 
   <section id="watchControl" class="card">
@@ -105,6 +105,23 @@ PANEL_HTML = """<!doctype html>
     <input id="torqueSlider" type="range" min="-2" max="2" step="0.01" value="0" />
     <div class="muted">数字输入用于精确实验；滑块用于快速观察。两者与 Viewer 的紫色 Control 同步。</div>
     <div id="status" class="status"></div>
+  </section>
+
+  <section id="kneeLessonCard" class="card" hidden>
+    <h2 style="margin-top:0">Phase 3：为什么抬腿需要持续用力？</h2>
+    <div id="kneeExplanation" class="insight">正在读取膝关节摆杆实验……</div>
+    <div class="metrics-grid" style="margin-top:12px">
+      <div class="metric">实验模式<strong id="kneeExperimentMode">--</strong></div>
+      <div class="metric">本轮初始角度<strong id="kneeInitialAngle">--</strong></div>
+      <div class="metric">当前重力要求的托举力矩<strong id="kneeGravityTorque">--</strong></div>
+      <div class="metric">膝电机实际承担<strong id="kneeMotorTorque">--</strong></div>
+      <div class="metric">尚需人体承担（概念量）<strong id="kneeHumanTorque">--</strong></div>
+      <div class="metric">电机 − 重力力矩<strong id="kneeNetTorque">--</strong></div>
+    </div>
+    <div class="muted" style="margin-top:10px">
+      当前模型没有真实肌肉。“人体承担”只是把保持姿态所需力矩减去电机力矩，
+      用于理解未来的关系：所需总力矩 = 人体力矩 + 外骨骼力矩。
+    </div>
   </section>
 
   <section class="card">
@@ -279,29 +296,62 @@ function renderWatch() {
 function renderState(state) {
   latest = state;
   const pdMode = state.mode === 'pd';
+  const context = state.learning_context || null;
+  const kneeMode = context && context.kind === 'knee_pendulum';
+  const manualTorqueEnabled = state.manual_torque_enabled !== false;
   if (pdMode && $('watchControl').nextElementSibling !== $('responseCard')) {
     // Keep the tuning controls and charts near the top in feedback mode.
     $('watchControl').insertAdjacentElement('afterend', $('responseCard'));
   }
-  $('modeBadge').textContent = pdMode
-    ? (state.gravity_compensation_enabled
-      ? 'Phase 2.5：PD + 重力补偿（先托住重量，再纠正误差）'
-      : 'Phase 2：纯 PD 闭环控制（根据误差实时改变扭矩）')
-    : 'Phase 1：恒扭矩开环控制';
-  $('torqueControl').hidden = pdMode;
+  $('panelTitle').textContent = kneeMode
+    ? 'LinkJoin 膝关节摆杆学习面板'
+    : 'LinkJoin 单关节学习面板';
+  $('panelSubtitle').textContent = kneeMode
+    ? '把固定大腿、小腿和膝电机分开，观察重力如何拉下小腿；只监听本机 127.0.0.1。'
+    : '这是 MuJoCo Viewer 的中文辅助面板；只监听本机 127.0.0.1。';
+  $('modeBadge').textContent = kneeMode
+    ? (context.experiment_mode === 'hold'
+      ? 'Phase 3：重力托举——膝电机实时补上保持姿态所需力矩'
+      : 'Phase 3：被动下落——膝电机不出力，只观察重力')
+    : (pdMode
+      ? (state.gravity_compensation_enabled
+        ? 'Phase 2.5：PD + 重力补偿（先托住重量，再纠正误差）'
+        : 'Phase 2：纯 PD 闭环控制（根据误差实时改变扭矩）')
+      : 'Phase 1：恒扭矩开环控制');
+  $('torqueControl').hidden = pdMode || !manualTorqueEnabled;
+  $('kneeLessonCard').hidden = !kneeMode;
   $('errorMetric').hidden = !pdMode;
   $('rawTorqueMetric').hidden = !pdMode;
   $('pdTorqueMetric').hidden = !pdMode;
   $('gravityTorqueMetric').hidden = !pdMode;
   $('pdInsightCard').hidden = !pdMode;
   $('responseCard').hidden = !pdMode;
-  $('reset').textContent = pdMode
-    ? '重新实验：回到 0° 并计时'
-    : '重置姿态';
+  $('reset').textContent = kneeMode
+    ? '重新实验：回到初始屈膝角度'
+    : (pdMode ? '重新实验：回到 0° 并计时' : '重置姿态');
   $('time').textContent = `${format(state.time, 3)} s`;
   $('qpos').textContent = `${format(state.qpos)} rad / ${format(state.qpos_deg, 2)}°`;
   $('qvel').textContent = `${format(state.qvel)} rad/s`;
   $('ctrl').textContent = `${format(state.ctrl, 3)} N·m`;
+  if (kneeMode) {
+    const holdMode = context.experiment_mode === 'hold';
+    $('kneeExperimentMode').textContent = holdMode ? '重力托举' : '被动下落';
+    $('kneeInitialAngle').textContent = `${format(context.initial_angle_deg, 1)}°`;
+    $('kneeGravityTorque').textContent =
+      `${format(state.required_hold_torque_nm, 3)} N·m`;
+    $('kneeMotorTorque').textContent = `${format(state.ctrl, 3)} N·m`;
+    $('kneeHumanTorque').textContent =
+      `${format(state.conceptual_human_torque_nm, 3)} N·m`;
+    $('kneeNetTorque').textContent =
+      `${format(state.motor_minus_gravity_torque_nm, 3)} N·m`;
+    $('kneeExplanation').textContent = holdMode
+      ? `现在膝电机会跟着姿态实时输出约 ${format(state.ctrl, 3)} N·m，` +
+        `抵消重力要求的 ${format(state.required_hold_torque_nm, 3)} N·m。` +
+        `两者接近相等，所以小腿能停在初始角度。`
+      : `现在膝电机输出 0 N·m，但在当前姿态重力要求约 ` +
+        `${format(state.required_hold_torque_nm, 3)} N·m 才能托住。` +
+        `缺少的力矩会让小腿向自然下垂的 0° 落下。`;
+  }
   if (pdMode) {
     $('positionError').textContent = `${format(state.position_error_rad)} rad / ${format(state.position_error_deg, 2)}°`;
     $('rawTorque').textContent = `${format(state.raw_torque_nm, 3)} N·m`;
@@ -658,11 +708,19 @@ class LearningPanelServer:
         pd_controller: PDController | None = None,
         gravity_compensation: GravityCompensationSwitch | None = None,
         step_response_analyzer: StepResponseAnalyzer | None = None,
+        manual_torque_enabled: bool = True,
+        learning_context: dict[str, Any] | None = None,
+        reset_position_rad: float | None = None,
     ) -> None:
         self.model = model
         self.data = data
         self.joint_id = joint_id
         self.actuator_id = actuator_id
+        self.manual_torque_enabled = bool(manual_torque_enabled)
+        self.learning_context = (
+            None if learning_context is None else learning_context.copy()
+        )
+        self.reset_position_rad = reset_position_rad
         self.pd_controller = pd_controller
         self.gravity_compensation = gravity_compensation
         if self.pd_controller is not None and self.gravity_compensation is None:
@@ -726,6 +784,24 @@ class LearningPanelServer:
                 ),
                 "mode": "pd" if self.pd_controller is not None else "torque",
             }
+            if self.learning_context is not None:
+                required_hold_torque = float(
+                    self.data.qfrc_bias[qvel_address]
+                )
+                motor_torque = float(self.data.ctrl[self.actuator_id])
+                snapshot.update(
+                    {
+                        "manual_torque_enabled": self.manual_torque_enabled,
+                        "learning_context": self.learning_context.copy(),
+                        "required_hold_torque_nm": required_hold_torque,
+                        "conceptual_human_torque_nm": (
+                            required_hold_torque - motor_torque
+                        ),
+                        "motor_minus_gravity_torque_nm": (
+                            motor_torque - required_hold_torque
+                        ),
+                    }
+                )
         if self.pd_controller is not None:
             with self._lock:
                 current_bias_torque = float(self.data.qfrc_bias[qvel_address])
@@ -841,6 +917,8 @@ class LearningPanelServer:
     def set_torque(self, value: float) -> float:
         if self.pd_controller is not None:
             raise ValueError("PD 模式下扭矩由控制器计算，请修改目标角度、Kp 或 Kd")
+        if not self.manual_torque_enabled:
+            raise ValueError("当前教学实验的电机力矩由实验模式自动控制")
         control_min, control_max = self.model.actuator_ctrlrange[self.actuator_id]
         if not control_min <= value <= control_max:
             raise ValueError(
@@ -940,10 +1018,16 @@ class LearningPanelServer:
         # The HTTP handler and MuJoCo's managed Viewer run on different
         # threads. Shared MjData can change again immediately after reset, so
         # use the model's immutable reset pose as this experiment's true start.
-        initial_position_rad = float(self.model.qpos0[qpos_address])
+        initial_position_rad = (
+            float(self.model.qpos0[qpos_address])
+            if self.reset_position_rad is None
+            else float(self.reset_position_rad)
+        )
         with self._lock:
             mujoco.mj_resetData(self.model, self.data)
+            self.data.qpos[qpos_address] = initial_position_rad
             self.data.ctrl[self.actuator_id] = 0.0
+            mujoco.mj_forward(self.model, self.data)
         if self.pd_controller is not None and self.step_response_analyzer is not None:
             target_rad = self.pd_controller.settings()["target_position_rad"]
             self.step_response_analyzer.start(
